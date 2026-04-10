@@ -294,7 +294,6 @@ export function ApiConfigTabContainer() {
             onToggleProviderHidden={updateProviderHidden}
             labels={{
               providerPool: t('providerPool'),
-              providerPoolDesc: t('providerPoolDesc'),
               dragToSort: t('dragToSort'),
               dragToSortHint: t('dragToSortHint'),
               hideProvider: t('hideProvider'),

@@ -193,33 +193,129 @@ export default function HomePage() {
           45% { transform: translate(-15px, -20px) scale(1.15); opacity: 0.7; }
           70% { transform: translate(10px, -10px) scale(1); opacity: 0.35; }
         }
-        @keyframes bracket-breathe {
-          0%, 70%, 100% { opacity: 0.2; }
-          75%, 90% { opacity: 0.6; }
+        @keyframes home-hero-focus-rack-text {
+          0%, 70%, 100% { filter: blur(0px); opacity: 1; }
+          75% { filter: blur(3px); opacity: 0.85; }
+          80% { filter: blur(1.5px); opacity: 0.9; }
+          85% { filter: blur(0.5px); opacity: 0.95; }
+          88% { filter: blur(1px); opacity: 0.92; }
+          92% { filter: blur(0px); opacity: 1; }
+        }
+        @keyframes home-hero-focus-rack-frame {
+          0%, 70%, 100% {
+            opacity: 0.24;
+            filter: blur(0px);
+            transform: scale(1);
+            box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+          }
+          75% {
+            opacity: 0.7;
+            filter: blur(2px);
+            transform: scale(1.04);
+            box-shadow: 0 0 14px rgba(255, 255, 255, 0.18);
+          }
+          80% {
+            opacity: 0.58;
+            filter: blur(1px);
+            transform: scale(1.02);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.12);
+          }
+          85% {
+            opacity: 0.5;
+            filter: blur(0.5px);
+            transform: scale(1.01);
+            box-shadow: 0 0 6px rgba(255, 255, 255, 0.08);
+          }
+          88% {
+            opacity: 0.56;
+            filter: blur(0.75px);
+            transform: scale(1.02);
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.1);
+          }
+          92% {
+            opacity: 0.24;
+            filter: blur(0px);
+            transform: scale(1);
+            box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+          }
+        }
+        @keyframes home-hero-focus-rack-rec {
+          0%, 70%, 100% {
+            opacity: 0.58;
+            filter: blur(0px);
+            transform: scale(1);
+          }
+          75% {
+            opacity: 1;
+            filter: blur(1.5px);
+            transform: scale(1.06);
+          }
+          80% {
+            opacity: 0.9;
+            filter: blur(0.8px);
+            transform: scale(1.03);
+          }
+          85% {
+            opacity: 0.78;
+            filter: blur(0.35px);
+            transform: scale(1.01);
+          }
+          88% {
+            opacity: 0.86;
+            filter: blur(0.6px);
+            transform: scale(1.02);
+          }
+          92% {
+            opacity: 0.58;
+            filter: blur(0px);
+            transform: scale(1);
+          }
         }
       `}</style>
 
       <main className="flex flex-col items-center pt-[13vh] pb-12 px-4 max-w-5xl mx-auto w-full">
 
         {/* ─── 取景器整体包裹：标题 + 输入框 ─── */}
-        <div className="w-full relative p-5">
+        <div className="w-full relative p-5 [--home-hero-focus-rack-duration:8s]">
           {/* 四角校准线 */}
-          <span className="absolute top-0 left-0 w-5 h-5 border-t border-l border-[var(--glass-text-primary)] pointer-events-none z-10" style={{ animation: 'bracket-breathe 8s ease-in-out infinite' }} />
-          <span className="absolute top-0 right-0 w-5 h-5 border-t border-r border-[var(--glass-text-primary)] pointer-events-none z-10" style={{ animation: 'bracket-breathe 8s ease-in-out infinite' }} />
-          <span className="absolute bottom-0 left-0 w-5 h-5 border-b border-l border-[var(--glass-text-primary)] pointer-events-none z-10" style={{ animation: 'bracket-breathe 8s ease-in-out infinite' }} />
-          <span className="absolute bottom-0 right-0 w-5 h-5 border-b border-r border-[var(--glass-text-primary)] pointer-events-none z-10" style={{ animation: 'bracket-breathe 8s ease-in-out infinite' }} />
+          <span
+            data-home-focus-corner="top-left"
+            className="absolute top-0 left-0 w-5 h-5 border-t border-l border-[var(--glass-text-primary)] pointer-events-none z-10"
+            style={{ animation: 'home-hero-focus-rack-frame var(--home-hero-focus-rack-duration) ease-in-out infinite' }}
+          />
+          <span
+            data-home-focus-corner="top-right"
+            className="absolute top-0 right-0 w-5 h-5 border-t border-r border-[var(--glass-text-primary)] pointer-events-none z-10"
+            style={{ animation: 'home-hero-focus-rack-frame var(--home-hero-focus-rack-duration) ease-in-out infinite' }}
+          />
+          <span
+            data-home-focus-corner="bottom-left"
+            className="absolute bottom-0 left-0 w-5 h-5 border-b border-l border-[var(--glass-text-primary)] pointer-events-none z-10"
+            style={{ animation: 'home-hero-focus-rack-frame var(--home-hero-focus-rack-duration) ease-in-out infinite' }}
+          />
+          <span
+            data-home-focus-corner="bottom-right"
+            className="absolute bottom-0 right-0 w-5 h-5 border-b border-r border-[var(--glass-text-primary)] pointer-events-none z-10"
+            style={{ animation: 'home-hero-focus-rack-frame var(--home-hero-focus-rack-duration) ease-in-out infinite' }}
+          />
 
           {/* REC 录制指示灯 */}
           <span
+            data-home-focus-rec="true"
             className="absolute top-2 right-7 flex items-center gap-1 z-10"
-            style={{ animation: 'bracket-breathe 2s ease-in-out infinite' }}
+            style={{ animation: 'home-hero-focus-rack-rec var(--home-hero-focus-rack-duration) ease-in-out infinite' }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.7)]" />
             <span className="text-[8px] font-mono font-bold tracking-widest text-red-500/70">REC</span>
           </span>
 
           {/* 标题区 */}
-          <TypewriterHero title={t('title')} subtitle={t('subtitle')} />
+          <TypewriterHero
+            title={t('title')}
+            subtitle={t('subtitle')}
+            focusAnimation="home-hero-focus-rack-text var(--home-hero-focus-rack-duration) ease-in-out infinite"
+            subtitleAnimation="home-hero-focus-rack-text var(--home-hero-focus-rack-duration) ease-in-out infinite"
+          />
 
           {/* 呼吸光晕 + 输入区域 */}
           <div className="w-full relative group">

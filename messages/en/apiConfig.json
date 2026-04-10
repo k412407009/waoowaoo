@@ -82,7 +82,6 @@
   "imageModelTip": "We recommend using Google's Banana series models. Other image models currently have limited generation quality.",
   "customProviderTip": "This project is currently in beta. Due to varying custom API formats across providers, custom API compatibility is still limited. We recommend using the built-in official APIs. Future updates will expand compatibility with more providers.",
   "providerPool": "Provider Pool",
-  "providerPoolDesc": "Configure and use a rich selection of models from global providers",
   "dragToSort": "Drag to sort",
   "dragToSortHint": "Drag the top-left handle on each card to reorder providers",
   "hideProvider": "Hide provider",

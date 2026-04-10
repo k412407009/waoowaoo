@@ -51,7 +51,6 @@ interface ApiConfigProviderListProps {
   onToggleProviderHidden: (providerId: string, hidden: boolean) => void
   labels: {
     providerPool: string
-    providerPoolDesc: string
     dragToSort: string
     dragToSortHint: string
     hideProvider: string
@@ -131,7 +130,6 @@ export function ApiConfigProviderList({
             </span>
             <div>
               <h2 className="text-xl font-bold text-[var(--glass-text-primary)]">{labels.providerPool}</h2>
-              <p className="text-[13px] text-[var(--glass-text-secondary)]">{labels.providerPoolDesc}</p>
               <p className="text-[12px] text-[var(--glass-text-tertiary)]">{labels.dragToSortHint}</p>
             </div>
           </div>

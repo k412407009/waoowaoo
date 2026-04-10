@@ -110,4 +110,19 @@ describe('HomePage quick-start input', () => {
     expect(html).toContain('data-min-rows="3"')
     expect(html).toContain('data-textarea-class="px-0 pt-0 pb-3 align-top"')
   })
+
+  it('keeps the title and all four frame corners on the same focus-rack timeline', () => {
+    Reflect.set(globalThis, 'React', React)
+
+    const html = renderToStaticMarkup(createElement(HomePage))
+    const cornerMatches = html.match(/data-home-focus-corner=/g) ?? []
+
+    expect(html).toContain('[--home-hero-focus-rack-duration:8s]')
+    expect(html).toContain('animation:home-hero-focus-rack-text var(--home-hero-focus-rack-duration) ease-in-out infinite')
+    expect(html).toContain('data-home-focus-subtitle="true"')
+    expect(html).toContain('data-home-focus-rec="true"')
+    expect(cornerMatches).toHaveLength(4)
+    expect(html).toContain('animation:home-hero-focus-rack-frame var(--home-hero-focus-rack-duration) ease-in-out infinite')
+    expect(html).toContain('animation:home-hero-focus-rack-rec var(--home-hero-focus-rack-duration) ease-in-out infinite')
+  })
 })
