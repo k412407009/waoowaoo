@@ -10,6 +10,8 @@ import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
  * POST /api/asset-hub/ai-modify-character
  * body: { characterId, appearanceIndex, currentDescription, modifyInstruction }
  */
+export const dynamic = 'force-dynamic'
+
 export const POST = apiHandler(async (request: NextRequest) => {
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult

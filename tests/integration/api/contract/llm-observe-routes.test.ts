@@ -348,6 +348,14 @@ const ROUTE_CASES: ReadonlyArray<LLMRouteCase> = [
   },
 ]
 
+const FORCE_DYNAMIC_ASSET_HUB_ROUTES = [
+  'src/app/api/asset-hub/ai-design-character/route.ts',
+  'src/app/api/asset-hub/ai-design-location/route.ts',
+  'src/app/api/asset-hub/ai-modify-character/route.ts',
+  'src/app/api/asset-hub/ai-modify-location/route.ts',
+  'src/app/api/asset-hub/ai-modify-prop/route.ts',
+] as const
+
 async function invokePostRoute(routeCase: LLMRouteCase): Promise<Response> {
   const modulePath = toModuleImportPath(routeCase.routeFile)
   const mod = await import(modulePath)
@@ -378,6 +386,13 @@ describe('api contract - llm observe routes (behavior)', () => {
 
   it('keeps expected coverage size', () => {
     expect(ROUTE_CASES.length).toBe(25)
+  })
+
+  it('marks asset-hub AI routes as force-dynamic to keep app-route build registration stable', async () => {
+    for (const routeFile of FORCE_DYNAMIC_ASSET_HUB_ROUTES) {
+      const mod = await import(toModuleImportPath(routeFile)) as { dynamic?: string }
+      expect(mod.dynamic).toBe('force-dynamic')
+    }
   })
 
   for (const routeCase of ROUTE_CASES) {

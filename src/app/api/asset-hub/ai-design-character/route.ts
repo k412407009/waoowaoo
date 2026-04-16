@@ -9,6 +9,8 @@ import { getUserModelConfig } from '@/lib/config-service'
 /**
  * 资产中心 - AI 设计角色描述（任务化）
  */
+export const dynamic = 'force-dynamic'
+
 export const POST = apiHandler(async (request: NextRequest) => {
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult

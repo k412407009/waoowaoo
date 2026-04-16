@@ -5,6 +5,8 @@ import { apiHandler, ApiError } from '@/lib/api-errors'
 import { TASK_TYPE } from '@/lib/task/types'
 import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
 
+export const dynamic = 'force-dynamic'
+
 export const POST = apiHandler(async (request: NextRequest) => {
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
