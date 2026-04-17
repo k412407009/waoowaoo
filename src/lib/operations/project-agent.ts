@@ -8,14 +8,14 @@ import { loadScriptPreview, loadStoryboardPreview } from '@/lib/project-agent/pr
 import { resolveProjectPhase } from '@/lib/project-agent/project-phase'
 import { assembleProjectProjectionLite } from '@/lib/project-projection/lite'
 import { submitAssetGenerateTask, submitAssetModifyTask } from '@/lib/assets/services/asset-actions'
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { getRequestId } from '@/lib/api-errors'
 import { submitTask } from '@/lib/task/submitter'
 import { resolveRequiredTaskLocale } from '@/lib/task/resolve-locale'
 import { TASK_TYPE } from '@/lib/task/types'
 import { buildDefaultTaskBillingInfo } from '@/lib/billing'
 import { withTaskUiPayload } from '@/lib/task/ui-payload'
-import { getProjectModelConfig, resolveProjectModelCapabilityGenerationOptions } from '@/lib/config-service'
+import { buildImageBillingPayload, getProjectModelConfig, resolveProjectModelCapabilityGenerationOptions } from '@/lib/config-service'
 import { getProviderKey, resolveModelSelection, resolveModelSelectionOrSingle } from '@/lib/api-config'
 import { estimateVoiceLineMaxSeconds } from '@/lib/voice/generate-voice-line'
 import { composeModelKey, parseModelKeyStrict, type CapabilityValue } from '@/lib/model-config-contract'
@@ -105,6 +105,65 @@ function hasSpeakerVoiceForProvider(
     providerKey,
     character,
     speakerVoice,
+  })
+}
+
+function createPanelVariantId(): string {
+  try {
+    return randomUUID()
+  } catch {
+    return `panel-variant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  }
+}
+
+async function rollbackCreatedVariantPanel(params: {
+  panelId: string
+  storyboardId: string
+  panelIndex: number
+}) {
+  await prisma.$transaction(async (tx) => {
+    await tx.projectPanel.delete({
+      where: { id: params.panelId },
+    })
+
+    const maxPanel = await tx.projectPanel.findFirst({
+      where: { storyboardId: params.storyboardId },
+      orderBy: { panelIndex: 'desc' },
+      select: { panelIndex: true },
+    })
+    const maxPanelIndex = maxPanel?.panelIndex ?? -1
+    const offset = maxPanelIndex + 1000
+
+    await tx.projectPanel.updateMany({
+      where: {
+        storyboardId: params.storyboardId,
+        panelIndex: { gt: params.panelIndex },
+      },
+      data: {
+        panelIndex: { increment: offset },
+        panelNumber: { increment: offset },
+      },
+    })
+
+    await tx.projectPanel.updateMany({
+      where: {
+        storyboardId: params.storyboardId,
+        panelIndex: { gt: params.panelIndex + offset },
+      },
+      data: {
+        panelIndex: { decrement: offset + 1 },
+        panelNumber: { decrement: offset + 1 },
+      },
+    })
+
+    const panelCount = await tx.projectPanel.count({
+      where: { storyboardId: params.storyboardId },
+    })
+
+    await tx.projectStoryboard.update({
+      where: { id: params.storyboardId },
+      data: { panelCount },
+    })
   })
 }
 
@@ -762,6 +821,161 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           ...result,
           panelId,
         }
+      },
+    },
+    panel_variant: {
+      description: 'Insert a variant panel after an existing panel and enqueue image generation (async task submission).',
+      sideEffects: {
+        mode: 'act',
+        risk: 'high',
+        billable: true,
+        requiresConfirmation: true,
+        confirmationSummary: '将创建新的分镜格并生成变体图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
+      },
+      inputSchema: z.object({
+        confirmed: z.boolean().optional(),
+        storyboardId: z.string().min(1),
+        insertAfterPanelId: z.string().min(1),
+        sourcePanelId: z.string().min(1),
+        variant: z.record(z.unknown()),
+      }).passthrough(),
+      execute: async (ctx, input) => {
+        const locale = resolveLocaleFromContext(ctx.context.locale)
+        const storyboardId = input.storyboardId.trim()
+        const insertAfterPanelId = input.insertAfterPanelId.trim()
+        const sourcePanelId = input.sourcePanelId.trim()
+        const variant = input.variant || {}
+
+        const variantVideoPrompt = typeof variant.video_prompt === 'string' ? variant.video_prompt.trim() : ''
+        if (!variantVideoPrompt) {
+          throw new Error('PROJECT_AGENT_PANEL_VARIANT_INVALID')
+        }
+
+        const storyboard = await prisma.projectStoryboard.findUnique({
+          where: { id: storyboardId },
+          select: {
+            id: true,
+            episode: {
+              select: {
+                projectId: true,
+              },
+            },
+          },
+        })
+        if (!storyboard || storyboard.episode.projectId !== ctx.projectId) {
+          throw new Error('PROJECT_AGENT_STORYBOARD_NOT_FOUND')
+        }
+
+        const [sourcePanel, insertAfter] = await Promise.all([
+          prisma.projectPanel.findUnique({ where: { id: sourcePanelId } }),
+          prisma.projectPanel.findUnique({ where: { id: insertAfterPanelId } }),
+        ])
+        if (!sourcePanel || sourcePanel.storyboardId !== storyboardId) {
+          throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+        }
+        if (!insertAfter || insertAfter.storyboardId !== storyboardId) {
+          throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+        }
+
+        const projectModelConfig = await getProjectModelConfig(ctx.projectId, ctx.userId)
+        const imageModel = projectModelConfig.storyboardModel
+        const createdPanelId = createPanelVariantId()
+
+        let billingPayload: Record<string, unknown>
+        try {
+          billingPayload = await buildImageBillingPayload({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            imageModel,
+            basePayload: { ...(isRecord(input) ? input : {}), newPanelId: createdPanelId, meta: { locale } },
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Image model capability not configured'
+          throw new Error(message)
+        }
+
+        const createdPanel = await prisma.$transaction(async (tx) => {
+          const affectedPanels = await tx.projectPanel.findMany({
+            where: { storyboardId, panelIndex: { gt: insertAfter.panelIndex } },
+            select: { id: true, panelIndex: true },
+            orderBy: { panelIndex: 'asc' },
+          })
+
+          for (const panel of affectedPanels) {
+            await tx.projectPanel.update({
+              where: { id: panel.id },
+              data: { panelIndex: -(panel.panelIndex + 1) },
+            })
+          }
+
+          for (const panel of affectedPanels) {
+            await tx.projectPanel.update({
+              where: { id: panel.id },
+              data: { panelIndex: panel.panelIndex + 1 },
+            })
+          }
+
+          const created = await tx.projectPanel.create({
+            data: {
+              id: createdPanelId,
+              storyboardId,
+              panelIndex: insertAfter.panelIndex + 1,
+              panelNumber: insertAfter.panelIndex + 2,
+              shotType: typeof variant.shot_type === 'string' ? variant.shot_type : sourcePanel.shotType,
+              cameraMove: typeof variant.camera_move === 'string' ? variant.camera_move : sourcePanel.cameraMove,
+              description: typeof variant.description === 'string' ? variant.description : sourcePanel.description,
+              videoPrompt: variantVideoPrompt,
+              location: typeof variant.location === 'string' ? variant.location : sourcePanel.location,
+              characters: variant.characters ? JSON.stringify(variant.characters) : sourcePanel.characters,
+              srtSegment: sourcePanel.srtSegment,
+              duration: sourcePanel.duration,
+            },
+          })
+
+          const panelCount = await tx.projectPanel.count({
+            where: { storyboardId },
+          })
+
+          await tx.projectStoryboard.update({
+            where: { id: storyboardId },
+            data: { panelCount },
+          })
+
+          return created
+        })
+
+        let result: Awaited<ReturnType<typeof submitTask>>
+        try {
+          result = await submitTask({
+            userId: ctx.userId,
+            locale: resolveRequiredTaskLocale(ctx.request, billingPayload),
+            requestId: getRequestId(ctx.request),
+            projectId: ctx.projectId,
+            type: TASK_TYPE.PANEL_VARIANT,
+            targetType: 'ProjectPanel',
+            targetId: createdPanel.id,
+            payload: billingPayload,
+            dedupeKey: `panel_variant:${storyboardId}:${insertAfterPanelId}:${sourcePanelId}`,
+            billingInfo: buildDefaultTaskBillingInfo(TASK_TYPE.PANEL_VARIANT, billingPayload),
+          })
+        } catch (error) {
+          await rollbackCreatedVariantPanel({
+            panelId: createdPanel.id,
+            storyboardId,
+            panelIndex: createdPanel.panelIndex,
+          })
+          throw error
+        }
+
+        writeOperationDataPart<TaskSubmittedPartData>(ctx.writer, 'data-task-submitted', {
+          operationId: 'panel_variant',
+          taskId: result.taskId,
+          status: result.status,
+          runId: result.runId || null,
+          deduped: result.deduped,
+        })
+
+        return { ...result, panelId: createdPanel.id }
       },
     },
     voice_generate: {
