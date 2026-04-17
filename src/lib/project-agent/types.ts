@@ -2,6 +2,7 @@ import type { UIMessage } from 'ai'
 import type { CommandExecutionResult } from '@/lib/command-center/types'
 import type { WorkflowCanonicalEvent } from '@/lib/agent/events/workflow-events'
 import type { ProjectContextSnapshot } from '@/lib/project-context/types'
+import type { ProjectPhase, ProjectPhaseSnapshot } from './project-phase'
 import type { WorkflowPackageId, WorkflowSkillId } from '@/lib/skill-system/types'
 
 export type ProjectAssistantId = 'workspace-command'
@@ -71,6 +72,11 @@ export interface ProjectContextPartData {
   context: ProjectAssistantContextSnapshot
 }
 
+export interface ProjectPhasePartData {
+  phase: ProjectPhase
+  snapshot: ProjectPhaseSnapshot
+}
+
 export interface ProjectAssistantContextSnapshot {
   projectId: string
   projectName: string
@@ -100,6 +106,7 @@ export interface ProjectAssistantThreadSnapshot {
 }
 
 export type WorkspaceAssistantPartType =
+  | 'data-project-phase'
   | 'data-workflow-plan'
   | 'data-approval-request'
   | 'data-workflow-status'

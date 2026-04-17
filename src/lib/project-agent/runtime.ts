@@ -8,40 +8,16 @@ import {
   tool,
   type LanguageModel,
   type UIMessage,
-  type UIMessageStreamWriter,
 } from 'ai'
-import { z } from 'zod'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { NextRequest } from 'next/server'
 import { getProviderConfig, getProviderKey } from '@/lib/api-config'
-import {
-  buildRunLifecycleCanonicalEvent,
-  buildWorkflowApprovalCanonicalEvent,
-  buildWorkflowPlanCanonicalEvent,
-} from '@/lib/agent/events/workflow-events'
-import { assembleProjectContext } from '@/lib/project-context/assembler'
+import { createProjectAgentOperationRegistry } from '@/lib/operations/registry'
 import { getUserModelConfig } from '@/lib/config-service'
 import { resolveLlmRuntimeModel } from '@/lib/llm/runtime-shared'
-import { executeProjectCommand, approveProjectPlan, listProjectCommands, rejectProjectPlan } from '@/lib/command-center/executor'
-import { listSkillCatalogEntries, listWorkflowPackages } from '@/lib/skill-system/catalog'
-import { loadScriptPreview, loadStoryboardPreview } from './preview'
-import {
-  buildAssistantProjectContextSnapshot,
-  buildWorkflowApprovalReasons,
-  buildWorkflowApprovalSummary,
-  buildWorkflowPlanSummary,
-} from './presentation'
-import type {
-  ApprovalRequestPartData,
-  ProjectAgentContext,
-  ProjectContextPartData,
-  ScriptPreviewPartData,
-  StoryboardPreviewPartData,
-  WorkflowPlanPartData,
-  WorkflowStatusPartData,
-  WorkspaceAssistantPartType,
-} from './types'
+import type { ProjectAgentContext } from './types'
+import { resolveProjectPhase } from './project-phase'
 
 function normalizeProjectAgentContext(raw: unknown): ProjectAgentContext {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
@@ -99,16 +75,10 @@ async function resolveProjectAgentLanguageModel(input: {
   }
 }
 
-function writeDataPart<T>(writer: UIMessageStreamWriter<UIMessage>, type: WorkspaceAssistantPartType, data: T) {
-  writer.write({
-    type,
-    data,
-  })
-}
-
 function buildProjectAgentSystemPrompt(params: {
   projectId: string
   context: ProjectAgentContext
+  phaseSummary: string
 }) {
   const episodeId = params.context.episodeId || 'unknown'
   const stage = params.context.currentStage || 'unknown'
@@ -118,11 +88,12 @@ function buildProjectAgentSystemPrompt(params: {
     '对于 story-to-script 和 script-to-storyboard，只能通过固定 workflow package 执行。',
     'workflow package 内部 skills 顺序不可更改、不可跳过、不可合并。',
     '当用户要求执行这两条主流程时：先调用 create_workflow_plan，再等待审批；只有用户明确同意后才调用 approve_plan。',
-    '你可以调用 get_project_context、list_workflow_packages、create_workflow_plan、approve_plan、reject_plan、list_recent_commands、fetch_workflow_preview。',
+    '你可以调用 get_project_phase、get_project_context、list_workflow_packages、create_workflow_plan、approve_plan、reject_plan、list_recent_commands、fetch_workflow_preview、get_task_status。',
     '回答简洁，用中文。',
     `projectId=${params.projectId}`,
     `episodeId=${episodeId}`,
     `currentStage=${stage}`,
+    `projectPhase=${params.phaseSummary}`,
   ].join('\n')
 }
 
@@ -149,6 +120,12 @@ export async function createProjectAgentChatResponse(input: {
   }
 
   const context = normalizeProjectAgentContext(input.context)
+  const phase = await resolveProjectPhase({
+    projectId: input.projectId,
+    userId: input.userId,
+    episodeId: context.episodeId || null,
+    currentStage: context.currentStage || null,
+  })
   const resolved = await resolveProjectAgentLanguageModel({
     userId: input.userId,
     analysisModelKey,
@@ -157,196 +134,30 @@ export async function createProjectAgentChatResponse(input: {
   const stream = createUIMessageStream({
     originalMessages: normalizedMessages,
     execute: async ({ writer }) => {
-      const tools = {
-        get_project_context: tool({
-          description: 'Load the current project and episode context snapshot.',
-          inputSchema: z.object({}),
-          execute: async () => {
-            const projectContext = await assembleProjectContext({
-              projectId: input.projectId,
-              userId: input.userId,
-              episodeId: context.episodeId || null,
-              currentStage: context.currentStage || null,
-            })
-            writeDataPart<ProjectContextPartData>(writer, 'data-project-context', {
-              context: buildAssistantProjectContextSnapshot(projectContext),
-            })
-            return buildAssistantProjectContextSnapshot(projectContext)
-          },
-        }),
-        list_workflow_packages: tool({
-          description: 'List available workflow packages and skill catalog entries.',
-          inputSchema: z.object({}),
-          execute: async () => ({
-            workflows: listWorkflowPackages().map((workflowPackage) => ({
-              id: workflowPackage.manifest.id,
-              name: workflowPackage.manifest.name,
-              summary: workflowPackage.manifest.summary,
-              requiresApproval: workflowPackage.manifest.requiresApproval,
-              skills: workflowPackage.steps.map((step) => step.skillId),
-            })),
-            catalog: listSkillCatalogEntries(),
+      const operations = createProjectAgentOperationRegistry()
+      const tools = Object.fromEntries(
+        Object.entries(operations).map(([operationId, operation]) => [
+          operationId,
+          tool({
+            description: operation.description,
+            inputSchema: operation.inputSchema,
+            execute: async (args) => operation.execute({
+                request: input.request,
+                userId: input.userId,
+                projectId: input.projectId,
+                context,
+                writer,
+              }, args),
           }),
-        }),
-        create_workflow_plan: tool({
-          description: 'Create a persisted command and plan for a fixed workflow package.',
-          inputSchema: z.object({
-            workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-            episodeId: z.string().optional(),
-            content: z.string().optional(),
-          }),
-          execute: async ({ workflowId, episodeId, content }) => {
-            const result = await executeProjectCommand({
-              request: input.request,
-              projectId: input.projectId,
-              userId: input.userId,
-              body: {
-                commandType: 'run_workflow_package',
-                source: 'assistant-panel',
-                workflowId,
-                episodeId: episodeId || context.episodeId || undefined,
-                input: {
-                  ...(content ? { content } : {}),
-                },
-              },
-            })
-            const planData: WorkflowPlanPartData = {
-              workflowId,
-              commandId: result.commandId,
-              planId: result.planId,
-              summary: buildWorkflowPlanSummary(workflowId),
-              requiresApproval: result.requiresApproval,
-              event: buildWorkflowPlanCanonicalEvent({
-                workflowId,
-                commandId: result.commandId,
-                planId: result.planId,
-              }),
-              steps: result.steps.map((step) => ({
-                skillId: step.skillId,
-                title: step.title,
-              })),
-            }
-            writeDataPart(writer, 'data-workflow-plan', planData)
-            if (result.requiresApproval) {
-              const approvalData: ApprovalRequestPartData = {
-                workflowId,
-                commandId: result.commandId,
-                planId: result.planId,
-                summary: buildWorkflowApprovalSummary(workflowId),
-                reasons: buildWorkflowApprovalReasons(result.steps),
-                event: buildWorkflowApprovalCanonicalEvent({
-                  workflowId,
-                  planId: result.planId,
-                  status: 'pending',
-                }),
-              }
-              writeDataPart(writer, 'data-approval-request', approvalData)
-            } else {
-              const statusData: WorkflowStatusPartData = {
-                workflowId,
-                commandId: result.commandId,
-                planId: result.planId,
-                runId: result.linkedRunId,
-                status: result.status,
-                activeSkillId: result.steps[0]?.skillId as WorkflowStatusPartData['activeSkillId'],
-                event: result.linkedRunId
-                  ? buildRunLifecycleCanonicalEvent({
-                      workflowId,
-                      runId: result.linkedRunId,
-                      status: 'start',
-                    })
-                  : null,
-              }
-              writeDataPart(writer, 'data-workflow-status', statusData)
-            }
-            return result
-          },
-        }),
-        approve_plan: tool({
-          description: 'Approve a pending workflow plan and enqueue execution.',
-          inputSchema: z.object({
-            planId: z.string().min(1),
-            workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-          }),
-          execute: async ({ planId, workflowId }) => {
-            const result = await approveProjectPlan({
-              request: input.request,
-              userId: input.userId,
-              planId,
-            })
-            writeDataPart<WorkflowStatusPartData>(writer, 'data-workflow-status', {
-              workflowId,
-              commandId: result.commandId,
-              planId: result.planId,
-              runId: result.linkedRunId,
-              status: result.status,
-              activeSkillId: result.steps[0]?.skillId as WorkflowStatusPartData['activeSkillId'],
-              event: result.linkedRunId
-                ? buildRunLifecycleCanonicalEvent({
-                    workflowId,
-                    runId: result.linkedRunId,
-                    status: 'start',
-                  })
-                : null,
-            })
-            return result
-          },
-        }),
-        reject_plan: tool({
-          description: 'Reject a pending workflow plan.',
-          inputSchema: z.object({
-            planId: z.string().min(1),
-            note: z.string().optional(),
-          }),
-          execute: async ({ planId, note }) => {
-            const result = await rejectProjectPlan({
-              planId,
-              note,
-            })
-            return result
-          },
-        }),
-        list_recent_commands: tool({
-          description: 'List recent command and run status for the current project or episode.',
-          inputSchema: z.object({
-            limit: z.number().int().positive().max(20).optional(),
-          }),
-          execute: async ({ limit }) => {
-            return await listProjectCommands({
-              projectId: input.projectId,
-              episodeId: context.episodeId || null,
-              limit: limit || 10,
-            })
-          },
-        }),
-        fetch_workflow_preview: tool({
-          description: 'Load a rendered preview for the latest workflow artifacts.',
-          inputSchema: z.object({
-            workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-            episodeId: z.string().optional(),
-          }),
-          execute: async ({ workflowId, episodeId }) => {
-            const resolvedEpisodeId = episodeId || context.episodeId || ''
-            if (!resolvedEpisodeId) {
-              throw new Error('PROJECT_AGENT_EPISODE_REQUIRED')
-            }
-            if (workflowId === 'story-to-script') {
-              const preview = await loadScriptPreview({ episodeId: resolvedEpisodeId })
-              writeDataPart<ScriptPreviewPartData>(writer, 'data-script-preview', preview)
-              return preview
-            }
-            const preview = await loadStoryboardPreview({ episodeId: resolvedEpisodeId })
-            writeDataPart<StoryboardPreviewPartData>(writer, 'data-storyboard-preview', preview)
-            return preview
-          },
-        }),
-      }
+        ]),
+      )
 
       const result = streamText({
         model: resolved.languageModel,
         system: buildProjectAgentSystemPrompt({
           projectId: input.projectId,
           context,
+          phaseSummary: `${phase.phase}:${phase.activeRunCount}`,
         }),
         messages: await toModelMessages(normalizedMessages),
         tools,

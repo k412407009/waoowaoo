@@ -12,6 +12,7 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/componen
 import type {
   ApprovalRequestPartData,
   ProjectContextPartData,
+  ProjectPhasePartData,
   ScriptPreviewPartData,
   StoryboardPreviewPartData,
   WorkflowPlanPartData,
@@ -89,6 +90,28 @@ export function WorkflowStatusCard(props: {
           <div className="mt-1">Step {activeStep.stepIndex}/{activeStep.stepTotal} · {formatScopeRef(activeStep.scopeRef)}</div>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function ProjectPhaseDataCard({ data }: DataMessagePartProps<ProjectPhasePartData>) {
+  return (
+    <div className="rounded-2xl border border-[var(--glass-stroke-base)] bg-[var(--glass-bg-surface)]/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-[var(--glass-text-primary)]">Project Phase</div>
+          <div className="mt-1 text-xs text-[var(--glass-text-secondary)]">{data.phase}</div>
+        </div>
+        <div className="rounded-full bg-[var(--glass-bg-surface)] px-2.5 py-1 text-xs text-[var(--glass-text-secondary)]">
+          Runs {String(data.snapshot.activeRunCount)}
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-[var(--glass-text-secondary)]">
+        <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Clips {String(data.snapshot.progress.clipCount)}</div>
+        <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Screenplays {String(data.snapshot.progress.screenplayClipCount)}</div>
+        <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Storyboards {String(data.snapshot.progress.storyboardCount)}</div>
+        <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Voice {String(data.snapshot.progress.voiceLineCount)}</div>
+      </div>
     </div>
   )
 }
@@ -275,6 +298,7 @@ export function useWorkspaceAssistantMessagePartComponents({
     },
     data: {
       by_name: {
+        'project-phase': ProjectPhaseDataCard,
         'workflow-plan': WorkflowPlanDataCard,
         'approval-request': HiddenApprovalRequestDataCard,
         'workflow-status': (props) => (
