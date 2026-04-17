@@ -61,6 +61,8 @@ const taskTargetSchema = z.object({
   types: z.array(z.string().min(1)).optional(),
 })
 
+const DEFAULT_LIPSYNC_MODEL_KEY = composeModelKey('fal', 'fal-ai/kling-video/lipsync/audio-to-video')
+
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -1034,6 +1036,91 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         })
 
         return result
+      },
+    },
+    lip_sync: {
+      description: 'Generate lip-sync video for a storyboard panel using a voice line (async task submission).',
+      sideEffects: {
+        mode: 'act',
+        risk: 'high',
+        billable: true,
+        requiresConfirmation: true,
+        confirmationSummary: '将进行口型同步（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
+      },
+      inputSchema: z.object({
+        confirmed: z.boolean().optional(),
+        storyboardId: z.string().min(1),
+        panelIndex: z.number().int().min(0).max(2000),
+        voiceLineId: z.string().min(1),
+        lipSyncModel: z.string().optional(),
+      }).passthrough(),
+      execute: async (ctx, input) => {
+        const locale = resolveLocaleFromContext(ctx.context.locale)
+
+        const requestedLipSyncModel = normalizeString((input as Record<string, unknown>).lipSyncModel)
+        if (requestedLipSyncModel && !parseModelKeyStrict(requestedLipSyncModel)) {
+          throw new Error('PROJECT_AGENT_MODEL_KEY_INVALID')
+        }
+
+        const pref = await prisma.userPreference.findUnique({
+          where: { userId: ctx.userId },
+          select: { lipSyncModel: true },
+        })
+        const preferredLipSyncModel = normalizeString(pref?.lipSyncModel)
+        const resolvedLipSyncModel = requestedLipSyncModel || preferredLipSyncModel || DEFAULT_LIPSYNC_MODEL_KEY
+        if (!parseModelKeyStrict(resolvedLipSyncModel)) {
+          throw new Error('PROJECT_AGENT_MODEL_KEY_INVALID')
+        }
+
+        const storyboardId = input.storyboardId.trim()
+        const panelIndex = input.panelIndex
+        const voiceLineId = input.voiceLineId.trim()
+
+        const panel = await prisma.projectPanel.findFirst({
+          where: { storyboardId, panelIndex: Number(panelIndex) },
+          select: { id: true },
+        })
+        if (!panel) {
+          throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+        }
+
+        const payload: Record<string, unknown> = {
+          ...(isRecord(input) ? input : {}),
+          lipSyncModel: resolvedLipSyncModel,
+          meta: {
+            locale,
+          },
+        }
+        delete payload.confirmed
+
+        const result = await submitTask({
+          userId: ctx.userId,
+          locale: resolveRequiredTaskLocale(ctx.request, payload),
+          requestId: getRequestId(ctx.request),
+          projectId: ctx.projectId,
+          type: TASK_TYPE.LIP_SYNC,
+          targetType: 'ProjectPanel',
+          targetId: panel.id,
+          payload: withTaskUiPayload(payload, {
+            hasOutputAtStart: await hasPanelLipSyncOutput(panel.id),
+          }),
+          dedupeKey: `lip_sync:${panel.id}:${voiceLineId}`,
+          billingInfo: buildDefaultTaskBillingInfo(TASK_TYPE.LIP_SYNC, payload),
+        })
+
+        writeOperationDataPart<TaskSubmittedPartData>(ctx.writer, 'data-task-submitted', {
+          operationId: 'lip_sync',
+          taskId: result.taskId,
+          status: result.status,
+          runId: result.runId || null,
+          deduped: result.deduped,
+        })
+
+        return {
+          ...result,
+          panelId: panel.id,
+          lipSyncModel: resolvedLipSyncModel,
+        }
       },
     },
     generate_video: {
