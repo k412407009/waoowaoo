@@ -84,6 +84,7 @@ type VoiceLineRow = {
   id: string
   speaker: string
   content: string
+  audioUrl?: string | null
 }
 
 type CharacterRow = CharacterVoiceFields & {
@@ -675,10 +676,31 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'generate_character_image',
+          summary: `generate_character_image:${characterId}`,
+          entries: [
+            {
+              kind: 'asset_render_revert',
+              targetType: 'ProjectCharacter',
+              targetId: characterId,
+              payload: {
+                kind: 'character',
+                assetId: characterId,
+                appearanceId,
+              },
+            },
+          ],
+        })
+
         return {
           ...result,
           characterId,
           appearanceId: appearanceId || null,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -765,9 +787,29 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'generate_location_image',
+          summary: `generate_location_image:${locationId}`,
+          entries: [
+            {
+              kind: 'asset_render_revert',
+              targetType: 'ProjectLocation',
+              targetId: locationId,
+              payload: {
+                kind: 'location',
+                assetId: locationId,
+              },
+            },
+          ],
+        })
+
         return {
           ...result,
           locationId,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -822,9 +864,31 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const appearanceId = type === 'character' ? normalizeString(body.appearanceId) : ''
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'modify_asset_image',
+          summary: `modify_asset_image:${type}:${assetId}`,
+          entries: [
+            {
+              kind: 'asset_render_revert',
+              targetType: type === 'character' ? 'ProjectCharacter' : 'ProjectLocation',
+              targetId: assetId,
+              payload: {
+                kind: type,
+                assetId,
+                ...(appearanceId ? { appearanceId } : {}),
+              },
+            },
+          ],
+        })
+
         return {
           ...result,
           assetId,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -925,9 +989,25 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'regenerate_panel_image',
+          summary: `regenerate_panel_image:${panelId}`,
+          entries: [
+            {
+              kind: 'panel_candidate_cancel',
+              targetType: 'ProjectPanel',
+              targetId: panelId,
+            },
+          ],
+        })
+
         return {
           ...result,
           panelId,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -1083,7 +1163,26 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
-        return { ...result, panelId: createdPanel.id }
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'panel_variant',
+          summary: `panel_variant:${createdPanel.id}`,
+          entries: [
+            {
+              kind: 'panel_variant_delete',
+              targetType: 'ProjectPanel',
+              targetId: createdPanel.id,
+              payload: {
+                storyboardId,
+                panelIndex: createdPanel.panelIndex,
+              },
+            },
+          ],
+        })
+
+        return { ...result, panelId: createdPanel.id, mutationBatchId: mutationBatch.id }
       },
     },
     voice_generate: {
@@ -1186,6 +1285,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
               id: true,
               speaker: true,
               content: true,
+              audioUrl: true,
             },
           })
           voiceLines = allLines.filter((line) =>
@@ -1201,6 +1301,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
               id: true,
               speaker: true,
               content: true,
+              audioUrl: true,
             },
           })
           if (!line) {
@@ -1259,6 +1360,21 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         )
 
         const taskIds = results.map((item) => item.taskId)
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'voice_generate',
+          summary: `voice_generate:${episodeId}:${all ? 'all' : (lineId || 'single')}`,
+          entries: voiceLines.map((line) => ({
+            kind: 'voice_line_restore',
+            targetType: 'ProjectVoiceLine',
+            targetId: line.id,
+            payload: {
+              previousAudioUrl: (line as { audioUrl?: string | null }).audioUrl ?? null,
+            },
+          })),
+        })
         if (!all) {
           writeOperationDataPart<TaskSubmittedPartData>(ctx.writer, 'data-task-submitted', {
             operationId: 'voice_generate',
@@ -1269,6 +1385,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
             success: true,
             async: true,
             taskId: taskIds[0],
+            mutationBatchId: mutationBatch.id,
           }
         }
 
@@ -1285,6 +1402,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           results: results.map((item) => ({ lineId: item.refId, taskId: item.taskId })),
           taskIds,
           total: taskIds.length,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -1400,7 +1518,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
 
         const panel = await prisma.projectPanel.findFirst({
           where: { storyboardId, panelIndex: Number(panelIndex) },
-          select: { id: true },
+          select: { id: true, lipSyncVideoUrl: true },
         })
         if (!panel) {
           throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
@@ -1438,10 +1556,29 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'lip_sync',
+          summary: `lip_sync:${panel.id}:${voiceLineId}`,
+          entries: [
+            {
+              kind: 'panel_lipsync_restore',
+              targetType: 'ProjectPanel',
+              targetId: panel.id,
+              payload: {
+                previousLipSyncVideoUrl: panel.lipSyncVideoUrl ?? null,
+              },
+            },
+          ],
+        })
+
         return {
           ...result,
           panelId: panel.id,
           lipSyncModel: resolvedLipSyncModel,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
@@ -1505,7 +1642,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
                 { videoUrl: '' },
               ],
             },
-            select: { id: true },
+            select: { id: true, videoUrl: true },
             take: limit,
           })
 
@@ -1534,6 +1671,21 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           )
 
           const taskIds = tasks.map((task) => task.taskId)
+          const mutationBatch = await createMutationBatch({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            source: 'assistant-panel',
+            operationId: 'generate_video',
+            summary: `generate_video:${episodeId}:batch`,
+            entries: panels.map((panel) => ({
+              kind: 'panel_video_restore',
+              targetType: 'ProjectPanel',
+              targetId: panel.id,
+              payload: {
+                previousVideoUrl: panel.videoUrl ?? null,
+              },
+            })),
+          })
           writeOperationDataPart<TaskBatchSubmittedPartData>(ctx.writer, 'data-task-batch-submitted', {
             operationId: 'generate_video',
             total: tasks.length,
@@ -1544,10 +1696,12 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           return {
             tasks,
             total: tasks.length,
+            mutationBatchId: mutationBatch.id,
           }
         }
 
         let panelId = normalizeString(payload.panelId)
+        let previousVideoUrl: string | null = null
         if (!panelId) {
           const storyboardId = normalizeString(payload.storyboardId)
           const panelIndex = typeof payload.panelIndex === 'number' ? payload.panelIndex : NaN
@@ -1556,12 +1710,23 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           }
           const panel = await prisma.projectPanel.findFirst({
             where: { storyboardId, panelIndex: Number(panelIndex) },
-            select: { id: true },
+            select: { id: true, videoUrl: true },
           })
           panelId = panel?.id || ''
+          previousVideoUrl = panel?.videoUrl ?? null
         }
         if (!panelId) {
           throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+        }
+        if (normalizeString(payload.panelId)) {
+          const panel = await prisma.projectPanel.findUnique({
+            where: { id: panelId },
+            select: { videoUrl: true },
+          })
+          if (!panel) {
+            throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+          }
+          previousVideoUrl = panel.videoUrl ?? null
         }
 
         const result = await submitTask({
@@ -1587,9 +1752,28 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           deduped: result.deduped,
         })
 
+        const mutationBatch = await createMutationBatch({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          source: 'assistant-panel',
+          operationId: 'generate_video',
+          summary: `generate_video:${panelId}`,
+          entries: [
+            {
+              kind: 'panel_video_restore',
+              targetType: 'ProjectPanel',
+              targetId: panelId,
+              payload: {
+                previousVideoUrl,
+              },
+            },
+          ],
+        })
+
         return {
           ...result,
           panelId,
+          mutationBatchId: mutationBatch.id,
         }
       },
     },
