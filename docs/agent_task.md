@@ -50,6 +50,7 @@
 - `fetch_workflow_preview`
 - `get_task_status`
 - `generate_character_image`（Act Mode，需 confirmed=true 二次确认）
+- `generate_location_image`（Act Mode，需 confirmed=true 二次确认）
 
 这意味着当前 assistant 的本质能力是：
 
@@ -1509,7 +1510,7 @@ system prompt 需要从当前的轻量规则，升级为包含：
 | P6 | 固定 workflow package 体系 | 已完成 | 中高 | `story-to-script` 与 `script-to-storyboard` 已 package 化 |
 | P7 | 项目完整上下文查询 | 已完成 | 中高 | 已将 `project-context` 吸收原 `policy-system` 逻辑，现有 full context 继续可用 |
 | P8 | 项目阶段推导 `resolveProjectPhase` | 部分完成 | 中 | 已实现最小 phase 解析与 `get_project_phase`，后续还需补失败项/stale artifacts/更细粒度阶段 |
-| P9 | Act Mode 直接操作 tools | 部分完成 | 低 | 已接入 `generate_character_image`（提交异步 task，需确认）；其他写操作仍未接入 |
+| P9 | Act Mode 直接操作 tools | 部分完成 | 低 | 已接入 `generate_character_image` / `generate_location_image`（提交异步 task，需确认）；其他写操作仍未接入 |
 | P10 | Task 查询桥接能力 | 已完成 | 中 | 已接入最小 `get_task_status` operation，复用现有 `queryTaskTargetStates()` |
 | P11 | Prompt 升级与双模式选择规则 | 部分完成 | 中 | 已注入基础 `projectPhase` 信息，并落地 `operation.sideEffects` + confirmed 二次确认卡片；Act/Plan 分流与更系统的规范仍需补完 |
 | P12 | Lite / Full Context 拆分 | 未开始 | 低 | 当前已去掉无意义 wrapper，但仍未拆成明确 lite/full 两套上下文（建议升级为 projection lite/full） |
@@ -1549,7 +1550,7 @@ system prompt 需要从当前的轻量规则，升级为包含：
 
 - [x] 梳理当前改动与边界：限制 `docs/` 只允许提交 `docs/agent_task.md`，避免无关内部文档进入版本库
 - [x] 补齐 operation sideEffects 框架：新增 `operation.sideEffects` 元信息，并在 runtime 落地 confirmed 二次确认机制（输出 confirmation request 卡片）
-- [x] 实现 `generate_character_image` 闭环：接入现有 `submitAssetGenerateTask()`，并输出 task submitted 卡片（taskId/status/runId/deduped）
+- [x] 实现 Act Mode 资产生图闭环：`generate_character_image` / `generate_location_image` 接入现有 `submitAssetGenerateTask()`，并输出 task submitted 卡片（taskId/status/runId/deduped）
 - [x] 前端新增 task 提交卡片：assistant 面板支持渲染 confirmation / task submitted 数据卡
 - [x] 补齐 `get_project_snapshot`：新增 `ProjectProjectionLite` 作为轻量状态读取入口，并让 `resolveProjectPhase` 使用 projection 而非 full context
 - [x] 最小校验：`npm run typecheck` + `npm run test:unit:all` 均通过
