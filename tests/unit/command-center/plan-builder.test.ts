@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildExecutionPlanDraft } from '@/lib/command-center/plan-builder'
-import { normalizeCommandEnvelope } from '@/lib/command-center/normalize'
+import { normalizeCommandEnvelope } from '@/lib/command-center/executor'
 
 describe('command-center plan builder', () => {
   it('story-to-script workflow package -> expands ordered workflow skills', () => {

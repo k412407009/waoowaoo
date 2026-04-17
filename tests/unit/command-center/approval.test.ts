@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { resolvePlanApprovalRequirement } from '@/lib/command-center/approval'
 import { buildExecutionPlanDraft } from '@/lib/command-center/plan-builder'
-import { normalizeCommandEnvelope } from '@/lib/command-center/normalize'
+import { normalizeCommandEnvelope, resolvePlanApprovalRequirement } from '@/lib/command-center/executor'
 
 describe('command-center approval routing', () => {
   it('gui workflow packages bypass approval for direct main-flow execution', () => {

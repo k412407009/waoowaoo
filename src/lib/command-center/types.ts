@@ -1,5 +1,5 @@
 import type { ArtifactType } from '@/lib/artifact-system/types'
-import type { PolicyOverrideInput } from '@/lib/policy-system/types'
+import type { ProjectPolicyOverrideInput } from '@/lib/project-context/types'
 import type { WorkflowPackageId } from '@/lib/skill-system/types'
 
 export type CommandSource = 'gui' | 'assistant-panel'
@@ -19,7 +19,7 @@ export interface CommandEnvelopeBase {
   projectId: string
   episodeId?: string | null
   scopeRef?: string | null
-  policyOverrides?: PolicyOverrideInput | null
+  policyOverrides?: ProjectPolicyOverrideInput | null
 }
 
 export interface RunWorkflowPackageCommand extends CommandEnvelopeBase {
