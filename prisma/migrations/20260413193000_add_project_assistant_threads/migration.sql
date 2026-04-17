@@ -12,7 +12,7 @@ CREATE TABLE `project_assistant_threads` (
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE UNIQUE INDEX `project_assistant_threads_projectId_userId_assistantId_scopeRef_key`
+CREATE UNIQUE INDEX `project_assistant_threads_projectId_userId_assistantId_scope_key`
   ON `project_assistant_threads`(`projectId`, `userId`, `assistantId`, `scopeRef`);
 
 CREATE INDEX `project_assistant_threads_projectId_episodeId_updatedAt_idx`
