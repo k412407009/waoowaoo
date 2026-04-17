@@ -126,6 +126,90 @@ export async function revertMutationEntry(entry: {
       })
       return
     }
+    case 'panel_prompt_restore': {
+      const previousVideoPrompt = payload.previousVideoPrompt === null || typeof payload.previousVideoPrompt === 'string'
+        ? payload.previousVideoPrompt
+        : undefined
+      const previousFirstLastFramePrompt = payload.previousFirstLastFramePrompt === null || typeof payload.previousFirstLastFramePrompt === 'string'
+        ? payload.previousFirstLastFramePrompt
+        : undefined
+      const previousImagePrompt = payload.previousImagePrompt === null || typeof payload.previousImagePrompt === 'string'
+        ? payload.previousImagePrompt
+        : undefined
+
+      await prisma.projectPanel.update({
+        where: { id: entry.targetId },
+        data: {
+          ...(previousVideoPrompt !== undefined ? { videoPrompt: previousVideoPrompt } : {}),
+          ...(previousFirstLastFramePrompt !== undefined ? { firstLastFramePrompt: previousFirstLastFramePrompt } : {}),
+          ...(previousImagePrompt !== undefined ? { imagePrompt: previousImagePrompt } : {}),
+        },
+      })
+      return
+    }
+    case 'panel_reorder_restore': {
+      const storyboardId = readString(payload.storyboardId)
+      const panels = Array.isArray(payload.panels) ? payload.panels : []
+      if (!storyboardId || panels.length === 0) {
+        throw new Error('MUTATION_REORDER_PAYLOAD_INVALID')
+      }
+
+      await prisma.$transaction(async (tx) => {
+        for (const panel of panels) {
+          const id = readString((panel as Record<string, unknown>).id)
+          const panelIndex = Number((panel as Record<string, unknown>).panelIndex)
+          if (!id || !Number.isFinite(panelIndex)) continue
+          await tx.projectPanel.update({
+            where: { id },
+            data: { panelIndex: -(panelIndex + 1) },
+          })
+        }
+        for (const panel of panels) {
+          const id = readString((panel as Record<string, unknown>).id)
+          const panelIndex = Number((panel as Record<string, unknown>).panelIndex)
+          const panelNumberRaw = (panel as Record<string, unknown>).panelNumber
+          const panelNumber = panelNumberRaw === null || panelNumberRaw === undefined ? null : Number(panelNumberRaw)
+          if (!id || !Number.isFinite(panelIndex)) continue
+          await tx.projectPanel.update({
+            where: { id },
+            data: {
+              panelIndex,
+              panelNumber: Number.isFinite(panelNumber as number) ? panelNumber : null,
+            },
+          })
+        }
+      })
+      return
+    }
+    case 'insert_panel_undo': {
+      const taskId = readString(payload.taskId)
+      if (!taskId) {
+        throw new Error('MUTATION_INSERT_PANEL_TASK_REQUIRED')
+      }
+      const task = await prisma.task.findUnique({
+        where: { id: taskId },
+        select: { status: true, result: true },
+      })
+      if (!task) {
+        throw new Error('MUTATION_TASK_NOT_FOUND')
+      }
+      if (!task.result || typeof task.result !== 'object' || Array.isArray(task.result)) {
+        throw new Error('MUTATION_TASK_RESULT_MISSING')
+      }
+      const result = task.result as Record<string, unknown>
+      const storyboardId = readString(result.storyboardId) || readString(payload.storyboardId) || entry.targetId
+      const panelId = readString(result.panelId)
+      const panelIndex = Number(result.panelIndex)
+      if (!storyboardId || !panelId || !Number.isFinite(panelIndex)) {
+        throw new Error('MUTATION_TASK_RESULT_INVALID')
+      }
+      await rollbackCreatedVariantPanel({
+        panelId,
+        storyboardId,
+        panelIndex,
+      })
+      return
+    }
     case 'voice_line_restore': {
       const previousAudioUrl = payload.previousAudioUrl === null || typeof payload.previousAudioUrl === 'string'
         ? payload.previousAudioUrl
