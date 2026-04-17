@@ -7,7 +7,8 @@ import { listSkillCatalogEntries, listWorkflowPackages } from '@/lib/skill-syste
 import { loadScriptPreview, loadStoryboardPreview } from '@/lib/project-agent/preview'
 import { resolveProjectPhase } from '@/lib/project-agent/project-phase'
 import { assembleProjectProjectionLite } from '@/lib/project-projection/lite'
-import { submitAssetGenerateTask } from '@/lib/assets/services/asset-actions'
+import { submitAssetGenerateTask, submitAssetModifyTask } from '@/lib/assets/services/asset-actions'
+import { createHash } from 'crypto'
 import { getRequestId } from '@/lib/api-errors'
 import { submitTask } from '@/lib/task/submitter'
 import { resolveRequiredTaskLocale } from '@/lib/task/resolve-locale'
@@ -17,8 +18,8 @@ import { withTaskUiPayload } from '@/lib/task/ui-payload'
 import { getProjectModelConfig, resolveProjectModelCapabilityGenerationOptions } from '@/lib/config-service'
 import { getProviderKey, resolveModelSelection, resolveModelSelectionOrSingle } from '@/lib/api-config'
 import { estimateVoiceLineMaxSeconds } from '@/lib/voice/generate-voice-line'
-import { parseModelKeyStrict, type CapabilityValue } from '@/lib/model-config-contract'
-import { hasPanelImageOutput, hasPanelVideoOutput, hasVoiceLineAudioOutput } from '@/lib/task/has-output'
+import { composeModelKey, parseModelKeyStrict, type CapabilityValue } from '@/lib/model-config-contract'
+import { hasPanelImageOutput, hasPanelLipSyncOutput, hasPanelVideoOutput, hasVoiceLineAudioOutput } from '@/lib/task/has-output'
 import {
   hasVoiceBindingForProvider,
   parseSpeakerVoiceMap,
@@ -28,6 +29,7 @@ import {
 import { BillingOperationError } from '@/lib/billing/errors'
 import { resolveBuiltinCapabilitiesByModelKey } from '@/lib/model-capabilities/lookup'
 import { resolveBuiltinPricing } from '@/lib/model-pricing/lookup'
+import { validatePreviewText, validateVoicePrompt } from '@/lib/providers/bailian/voice-design'
 import {
   buildAssistantProjectContextSnapshot,
   buildWorkflowApprovalReasons,
@@ -960,6 +962,78 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           taskIds,
           total: taskIds.length,
         }
+      },
+    },
+    voice_design: {
+      description: 'Design a new voice using a text prompt and preview text (async task submission).',
+      sideEffects: {
+        mode: 'act',
+        risk: 'high',
+        billable: true,
+        requiresConfirmation: true,
+        confirmationSummary: '将进行音色设计（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
+      },
+      inputSchema: z.object({
+        confirmed: z.boolean().optional(),
+        voicePrompt: z.string().min(1),
+        previewText: z.string().min(1),
+        preferredName: z.string().optional(),
+        language: z.enum(['zh', 'en']).optional(),
+      }),
+      execute: async (ctx, input) => {
+        const locale = resolveLocaleFromContext(ctx.context.locale)
+        const voicePrompt = input.voicePrompt.trim()
+        const previewText = input.previewText.trim()
+        const preferredName = input.preferredName?.trim() || 'custom_voice'
+        const language = input.language === 'en' ? 'en' : 'zh'
+
+        const promptValidation = validateVoicePrompt(voicePrompt)
+        if (!promptValidation.valid) {
+          throw new Error('PROJECT_AGENT_VOICE_PROMPT_INVALID')
+        }
+        const textValidation = validatePreviewText(previewText)
+        if (!textValidation.valid) {
+          throw new Error('PROJECT_AGENT_VOICE_PREVIEW_TEXT_INVALID')
+        }
+
+        const digest = createHash('sha1')
+          .update(`${ctx.userId}:${ctx.projectId}:${voicePrompt}:${previewText}:${preferredName}:${language}`)
+          .digest('hex')
+          .slice(0, 16)
+
+        const payload = {
+          voicePrompt,
+          previewText,
+          preferredName,
+          language,
+          displayMode: 'detail' as const,
+          meta: {
+            locale,
+          },
+        }
+
+        const result = await submitTask({
+          userId: ctx.userId,
+          locale: resolveRequiredTaskLocale(ctx.request, payload),
+          requestId: getRequestId(ctx.request),
+          projectId: ctx.projectId,
+          type: TASK_TYPE.VOICE_DESIGN,
+          targetType: 'Project',
+          targetId: ctx.projectId,
+          payload,
+          dedupeKey: `${TASK_TYPE.VOICE_DESIGN}:${digest}`,
+          billingInfo: buildDefaultTaskBillingInfo(TASK_TYPE.VOICE_DESIGN, payload),
+        })
+
+        writeOperationDataPart<TaskSubmittedPartData>(ctx.writer, 'data-task-submitted', {
+          operationId: 'voice_design',
+          taskId: result.taskId,
+          status: result.status,
+          runId: result.runId || null,
+          deduped: result.deduped,
+        })
+
+        return result
       },
     },
     generate_video: {
