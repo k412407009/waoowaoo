@@ -16,6 +16,7 @@ import type {
   ProjectPhasePartData,
   ScriptPreviewPartData,
   StoryboardPreviewPartData,
+  TaskBatchSubmittedPartData,
   TaskSubmittedPartData,
   WorkflowPlanPartData,
   WorkflowStatusPartData,
@@ -197,6 +198,22 @@ function TaskSubmittedDataCard({ data }: DataMessagePartProps<TaskSubmittedPartD
   )
 }
 
+function TaskBatchSubmittedDataCard({ data }: DataMessagePartProps<TaskBatchSubmittedPartData>) {
+  return (
+    <div className="rounded-2xl border border-[var(--glass-stroke-base)] bg-[var(--glass-bg-surface)]/70 p-3 text-xs text-[var(--glass-text-secondary)]">
+      <div className="text-sm font-medium text-[var(--glass-text-primary)]">Tasks Submitted</div>
+      <div className="mt-2">operation: {data.operationId}</div>
+      <div>total: {String(data.total)}</div>
+      <div className="mt-2 space-y-1 rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2 font-mono text-[10px] text-[var(--glass-text-tertiary)]">
+        {(data.taskIds || []).slice(0, 8).map((taskId: string) => (
+          <div key={taskId}>{taskId}</div>
+        ))}
+        {(data.taskIds || []).length > 8 ? <div>…</div> : null}
+      </div>
+    </div>
+  )
+}
+
 export function WorkflowPlanDataCard({ data }: DataMessagePartProps<WorkflowPlanPartData>) {
   return (
     <div className="rounded-2xl border border-[var(--glass-stroke-base)] bg-[var(--glass-bg-surface)]/70 p-3">
@@ -328,6 +345,7 @@ export function useWorkspaceAssistantMessagePartComponents({
         'project-phase': ProjectPhaseDataCard,
         'confirmation-request': ConfirmationRequestDataCard,
         'task-submitted': TaskSubmittedDataCard,
+        'task-batch-submitted': TaskBatchSubmittedDataCard,
         'workflow-plan': WorkflowPlanDataCard,
         'approval-request': HiddenApprovalRequestDataCard,
         'workflow-status': (props) => (

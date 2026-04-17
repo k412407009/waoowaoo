@@ -91,6 +91,16 @@ export interface TaskSubmittedPartData {
   deduped?: boolean
 }
 
+export interface TaskBatchSubmittedPartData {
+  operationId: string
+  total: number
+  taskIds: string[]
+  results?: Array<{
+    refId: string
+    taskId: string
+  }>
+}
+
 export interface ProjectAssistantContextSnapshot {
   projectId: string
   projectName: string
@@ -123,6 +133,7 @@ export type WorkspaceAssistantPartType =
   | 'data-project-phase'
   | 'data-confirmation-request'
   | 'data-task-submitted'
+  | 'data-task-batch-submitted'
   | 'data-workflow-plan'
   | 'data-approval-request'
   | 'data-workflow-status'
