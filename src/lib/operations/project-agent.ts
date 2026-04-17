@@ -8,6 +8,15 @@ import { loadScriptPreview, loadStoryboardPreview } from '@/lib/project-agent/pr
 import { resolveProjectPhase } from '@/lib/project-agent/project-phase'
 import { assembleProjectProjectionLite } from '@/lib/project-projection/lite'
 import { submitAssetGenerateTask } from '@/lib/assets/services/asset-actions'
+import { getRequestId } from '@/lib/api-errors'
+import { submitTask } from '@/lib/task/submitter'
+import { resolveRequiredTaskLocale } from '@/lib/task/resolve-locale'
+import { TASK_TYPE } from '@/lib/task/types'
+import { buildDefaultTaskBillingInfo } from '@/lib/billing'
+import { hasPanelImageOutput } from '@/lib/task/has-output'
+import { withTaskUiPayload } from '@/lib/task/ui-payload'
+import { getProjectModelConfig, resolveProjectModelCapabilityGenerationOptions } from '@/lib/config-service'
+import { resolveModelSelection } from '@/lib/api-config'
 import {
   buildAssistantProjectContextSnapshot,
   buildWorkflowApprovalReasons,
@@ -45,6 +54,12 @@ function normalizeString(value: unknown): string {
 function resolveLocaleFromContext(locale?: unknown): string {
   const normalized = normalizeString(locale)
   return normalized || 'zh'
+}
+
+function resolveCandidateCount(input?: unknown): number {
+  const parsed = typeof input === 'number' ? input : Number(input)
+  if (!Number.isFinite(parsed)) return 1
+  return Math.max(1, Math.min(4, Math.trunc(parsed)))
 }
 
 export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegistry {
@@ -457,6 +472,109 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         return {
           ...result,
           locationId,
+        }
+      },
+    },
+    regenerate_panel_image: {
+      description: 'Regenerate storyboard panel images (async task submission).',
+      sideEffects: {
+        mode: 'act',
+        risk: 'medium',
+        billable: true,
+        requiresConfirmation: true,
+        confirmationSummary: '将为分镜格子重新生成图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
+      },
+      inputSchema: z.object({
+        confirmed: z.boolean().optional(),
+        panelId: z.string().min(1).optional(),
+        storyboardId: z.string().min(1).optional(),
+        panelIndex: z.number().int().min(0).max(1000).optional(),
+        count: z.number().int().positive().max(4).optional(),
+      }).refine((value) => Boolean(value.panelId || (value.storyboardId && typeof value.panelIndex === 'number')), {
+        message: 'panelId or (storyboardId + panelIndex) is required',
+        path: ['panelId'],
+      }),
+      execute: async (ctx, input) => {
+        const locale = resolveLocaleFromContext(ctx.context.locale)
+
+        let panelId = normalizeString(input.panelId)
+        if (!panelId) {
+          const storyboardId = normalizeString(input.storyboardId)
+          const panelIndex = typeof input.panelIndex === 'number' ? input.panelIndex : NaN
+          if (!storyboardId || !Number.isFinite(panelIndex)) {
+            throw new Error('PROJECT_AGENT_PANEL_REQUIRED')
+          }
+          const panel = await prisma.projectPanel.findFirst({
+            where: {
+              storyboardId,
+              panelIndex,
+            },
+            select: { id: true },
+          })
+          panelId = panel?.id || ''
+        }
+
+        if (!panelId) {
+          throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+        }
+
+        const candidateCount = resolveCandidateCount(input.count)
+        const body = {
+          panelId,
+          candidateCount,
+          count: candidateCount,
+          meta: {
+            locale,
+          },
+        }
+
+        const projectModelConfig = await getProjectModelConfig(ctx.projectId, ctx.userId)
+        if (!projectModelConfig.storyboardModel) {
+          throw new Error('STORYBOARD_MODEL_NOT_CONFIGURED')
+        }
+        await resolveModelSelection(ctx.userId, projectModelConfig.storyboardModel, 'image')
+        const capabilityOptions = await resolveProjectModelCapabilityGenerationOptions({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          modelType: 'image',
+          modelKey: projectModelConfig.storyboardModel,
+        })
+
+        const billingPayload = {
+          ...body,
+          imageModel: projectModelConfig.storyboardModel,
+          ...(Object.keys(capabilityOptions).length > 0 ? { generationOptions: capabilityOptions } : {}),
+        }
+
+        const hasOutputAtStart = await hasPanelImageOutput(panelId)
+
+        const result = await submitTask({
+          userId: ctx.userId,
+          locale: resolveRequiredTaskLocale(ctx.request, body),
+          requestId: getRequestId(ctx.request),
+          projectId: ctx.projectId,
+          type: TASK_TYPE.IMAGE_PANEL,
+          targetType: 'ProjectPanel',
+          targetId: panelId,
+          payload: withTaskUiPayload(billingPayload, {
+            intent: 'regenerate',
+            hasOutputAtStart,
+          }),
+          dedupeKey: `image_panel:${panelId}:${candidateCount}`,
+          billingInfo: buildDefaultTaskBillingInfo(TASK_TYPE.IMAGE_PANEL, billingPayload),
+        })
+
+        writeOperationDataPart<TaskSubmittedPartData>(ctx.writer, 'data-task-submitted', {
+          operationId: 'regenerate_panel_image',
+          taskId: result.taskId,
+          status: result.status,
+          runId: result.runId || null,
+          deduped: result.deduped,
+        })
+
+        return {
+          ...result,
+          panelId,
         }
       },
     },
