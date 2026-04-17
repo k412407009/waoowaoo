@@ -180,7 +180,13 @@ export async function createProjectAgentChatResponse(input: {
         system: buildProjectAgentSystemPrompt({
           projectId: input.projectId,
           context,
-          phaseSummary: `${phase.phase}:${phase.activeRunCount}`,
+          phaseSummary: [
+            `phase=${phase.phase}`,
+            `activeRuns=${String(phase.activeRunCount)}`,
+            `progress=clips:${String(phase.progress.clipCount)},screenplays:${String(phase.progress.screenplayClipCount)},storyboards:${String(phase.progress.storyboardCount)},panels:${String(phase.progress.panelCount)},voices:${String(phase.progress.voiceLineCount)}`,
+            `actions.plan=${phase.availableActions.planMode.join(',') || '-'}`,
+            `actions.act=${phase.availableActions.actMode.join(',') || '-'}`,
+          ].join(' | '),
         }),
         messages: await toModelMessages(normalizedMessages),
         tools,
