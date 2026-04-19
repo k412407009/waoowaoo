@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { updateAssetRenderLabel } from '@/lib/assets/services/asset-label'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST /api/projects/[projectId]/update-asset-label
@@ -26,12 +26,17 @@ export const POST = apiHandler(async (
   void appearanceIndex
 
   if (type === 'character' || type === 'location') {
-    await updateAssetRenderLabel({
-      scope: 'project',
-      kind: type,
-      assetId: id,
+    await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'update_asset_render_label',
       projectId,
-      newName,
+      userId: authResult.session.user.id,
+      input: {
+        type,
+        assetId: id,
+        newName,
+      },
+      source: 'project-ui',
     })
     return NextResponse.json({ success: true })
   }

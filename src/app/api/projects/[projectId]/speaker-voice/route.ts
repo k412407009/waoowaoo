@@ -3,10 +3,9 @@ import { prisma } from '@/lib/prisma'
 import { getSignedUrl } from '@/lib/storage'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { resolveStorageKeyFromMediaValue } from '@/lib/media/service'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import {
   parseSpeakerVoiceMap,
-  type SpeakerVoiceEntry,
   type SpeakerVoiceMap,
 } from '@/lib/voice/provider-voice-binding'
 
@@ -113,56 +112,21 @@ export const PATCH = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const projectData = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { id: true },
-  })
-  if (!projectData) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const episode = await prisma.projectEpisode.findFirst({
-    where: { id: episodeId, projectId },
-    select: { id: true, speakerVoices: true },
-  })
-  if (!episode) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const speakerVoices = parseSpeakerVoiceMap(episode.speakerVoices)
-
-  let nextVoiceEntry: SpeakerVoiceEntry
-  if (provider === 'fal') {
-    const sourceAudioUrl = audioUrl!
-    const resolvedStorageKey = await resolveStorageKeyFromMediaValue(sourceAudioUrl)
-    const audioUrlToStore = resolvedStorageKey || sourceAudioUrl
-    nextVoiceEntry = {
-      provider: 'fal',
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'set_speaker_voice',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      episodeId,
+      speaker,
+      provider,
       voiceType,
-      audioUrl: audioUrlToStore,
-    }
-  } else {
-    const previewCandidate = previewAudioUrl || audioUrl
-    const resolvedPreviewKey = previewCandidate
-      ? await resolveStorageKeyFromMediaValue(previewCandidate)
-      : null
-    const previewAudioUrlToStore = previewCandidate
-      ? (resolvedPreviewKey || previewCandidate)
-      : undefined
-
-    nextVoiceEntry = {
-      provider: 'bailian',
-      voiceType,
-      voiceId: voiceId!,
-      ...(previewAudioUrlToStore ? { previewAudioUrl: previewAudioUrlToStore } : {}),
-    }
-  }
-
-  speakerVoices[speaker] = nextVoiceEntry
-
-  await prisma.projectEpisode.update({
-    where: { id: episodeId },
-    data: { speakerVoices: JSON.stringify(speakerVoices) },
+      ...(audioUrl ? { audioUrl } : {}),
+      ...(previewAudioUrl ? { previewAudioUrl } : {}),
+      ...(voiceId ? { voiceId } : {}),
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json({ success: true })

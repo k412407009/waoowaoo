@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { requireProjectAuth, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * GET - 获取项目的所有剧集
@@ -47,33 +47,18 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取下一个剧集编号
-  const lastEpisode = await prisma.projectEpisode.findFirst({
-    where: { projectId: project.id },
-    orderBy: { episodeNumber: 'desc' }
-  })
-  const nextEpisodeNumber = (lastEpisode?.episodeNumber || 0) + 1
-
-  // 创建剧集
-  const createData: Prisma.ProjectEpisodeUncheckedCreateInput = {
-    projectId: project.id,
-    episodeNumber: nextEpisodeNumber,
-    name: name.trim(),
-    description: description?.trim() || null,
-  }
-  if (typeof novelText === 'string') {
-    createData.novelText = novelText
-  }
-
-  const episode = await prisma.projectEpisode.create({
-    data: createData,
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'create_episode',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      name,
+      ...(description !== undefined ? { description } : {}),
+      ...(novelText !== undefined ? { novelText } : {}),
+    },
+    source: 'project-ui',
   })
 
-  // 更新最后编辑的剧集ID
-  await prisma.project.update({
-    where: { id: project.id },
-    data: { lastEpisodeId: episode.id }
-  })
-
-  return NextResponse.json({ episode }, { status: 201 })
+  return NextResponse.json(result, { status: 201 })
 })

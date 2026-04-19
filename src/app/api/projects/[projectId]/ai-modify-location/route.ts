@@ -1,8 +1,7 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuth, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { TASK_TYPE } from '@/lib/task/types'
-import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -24,19 +23,20 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const asyncTaskResponse = await maybeSubmitLLMTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    userId: session.user.id,
+    operationId: 'ai_modify_location',
     projectId,
-    type: TASK_TYPE.AI_MODIFY_LOCATION,
-    targetType: 'ProjectLocation',
-    targetId: locationId,
-    routePath: `/api/projects/${projectId}/ai-modify-location`,
-    body: {
-      ...body,
-      imageIndex},
-    dedupeKey: `ai_modify_location:${locationId}:${imageIndex}`})
-  if (asyncTaskResponse) return asyncTaskResponse
+    userId: session.user.id,
+    input: {
+      ...(body as Record<string, unknown>),
+      locationId,
+      imageIndex,
+      currentDescription,
+      modifyInstruction,
+    },
+    source: 'project-ui',
+  })
 
-  throw new ApiError('INVALID_PARAMS')
+  return NextResponse.json(result)
 })

@@ -1,13 +1,12 @@
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { queryTaskTargetStates } from '@/lib/task/state-service'
-import { assembleProjectContext } from '@/lib/project-context/assembler'
-import { executeProjectCommand, approveProjectPlan, listProjectCommands, rejectProjectPlan } from '@/lib/command-center/executor'
-import { listSkillCatalogEntries, listWorkflowPackages, readSkillCatalogDocument } from '@/lib/skill-system/catalog'
-import { loadScriptPreview, loadStoryboardPreview } from '@/lib/project-agent/preview'
-import { resolveProjectPhase } from '@/lib/project-agent/project-phase'
-import { assembleProjectProjectionLite } from '@/lib/project-projection/lite'
 import { submitAssetGenerateTask, submitAssetModifyTask } from '@/lib/assets/services/asset-actions'
+import { createReadOperations } from './read-ops'
+import { createPlanOperations } from './plan-ops'
+import { createGovernanceOperations } from './governance-ops'
+import { createEditOperations } from './edit-ops'
+import { createGuiOperations } from './gui-ops'
+import { createExtraOperations } from './extra-ops'
 import { createHash, randomUUID } from 'crypto'
 import { getRequestId } from '@/lib/api-errors'
 import { submitTask } from '@/lib/task/submitter'
@@ -30,50 +29,42 @@ import { BillingOperationError } from '@/lib/billing/errors'
 import { resolveBuiltinCapabilitiesByModelKey } from '@/lib/model-capabilities/lookup'
 import { resolveBuiltinPricing } from '@/lib/model-pricing/lookup'
 import { validatePreviewText, validateVoicePrompt } from '@/lib/providers/bailian/voice-design'
-import { createMutationBatch, listRecentMutationBatches } from '@/lib/mutation-batch/service'
-import { revertMutationBatch } from '@/lib/mutation-batch/revert'
+import { createMutationBatch } from '@/lib/mutation-batch/service'
 import { resolveInsertPanelUserInput } from '@/lib/project-workflow/insert-panel'
-import {
-  getSavedSkill,
-  listSavedSkills,
-  saveWorkflowPlanTemplateFromExecutionPlan,
-  SAVED_SKILL_KIND_WORKFLOW_PLAN_TEMPLATE,
-} from '@/lib/saved-skills/service'
-import {
-  buildAssistantProjectContextSnapshot,
-  buildWorkflowApprovalReasons,
-  buildWorkflowApprovalSummary,
-  buildWorkflowPlanSummary,
-} from '@/lib/project-agent/presentation'
-import {
-  buildRunLifecycleCanonicalEvent,
-  buildWorkflowApprovalCanonicalEvent,
-  buildWorkflowPlanCanonicalEvent,
-} from '@/lib/agent/events/workflow-events'
+import { serializeStructuredJsonField } from '@/lib/project-workflow/panel-ai-data-sync'
 import type {
-  ApprovalRequestPartData,
-  ProjectContextPartData,
-  ProjectPhasePartData,
-  ScriptPreviewPartData,
-  StoryboardPreviewPartData,
   TaskBatchSubmittedPartData,
   TaskSubmittedPartData,
-  WorkflowPlanPartData,
-  WorkflowStatusPartData,
 } from '@/lib/project-agent/types'
 import type { ProjectAgentOperationRegistry } from './types'
 import { writeOperationDataPart } from './types'
+import { getSignedUrl, generateUniqueKey, downloadAndUploadImage, toFetchableUrl } from '@/lib/storage'
+import { resolveStorageKeyFromMediaValue } from '@/lib/media/service'
 
-const taskTargetSchema = z.object({
-  targetType: z.string().min(1),
-  targetId: z.string().min(1),
-  types: z.array(z.string().min(1)).optional(),
-})
 
 const DEFAULT_LIPSYNC_MODEL_KEY = composeModelKey('fal', 'fal-ai/kling-video/lipsync/audio-to-video')
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function parseNullableNumberField(value: unknown): number | null {
+  if (value === null || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  throw new Error('INVALID_PARAMS')
+}
+
+function toStructuredJsonField(value: unknown, fieldName: string): string | null {
+  try {
+    return serializeStructuredJsonField(value, fieldName)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : `${fieldName} must be valid JSON`
+    throw new Error(message || 'INVALID_PARAMS')
+  }
 }
 
 function resolveLocaleFromContext(locale?: unknown): string {
@@ -92,6 +83,29 @@ type VoiceLineRow = {
   speaker: string
   content: string
   audioUrl?: string | null
+}
+
+type PanelHistoryEntry = {
+  url: string
+  timestamp: string
+}
+
+function parseUnknownArray(jsonValue: string | null): unknown[] {
+  if (!jsonValue) return []
+  try {
+    const parsed = JSON.parse(jsonValue)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function parsePanelHistory(jsonValue: string | null): PanelHistoryEntry[] {
+  return parseUnknownArray(jsonValue).filter((entry): entry is PanelHistoryEntry => {
+    if (!entry || typeof entry !== 'object') return false
+    const candidate = entry as { url?: unknown; timestamp?: unknown }
+    return typeof candidate.url === 'string' && typeof candidate.timestamp === 'string'
+  })
 }
 
 type CharacterRow = CharacterVoiceFields & {
@@ -308,487 +322,41 @@ function buildVideoPanelBillingInfoOrThrow(payload: unknown) {
   }
 }
 
+
 export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegistry {
   return {
-    get_project_phase: {
-      description: 'Resolve the current project phase, progress and available next actions.',
-      sideEffects: { mode: 'query', risk: 'none' },
-      inputSchema: z.object({}),
-      execute: async (ctx) => {
-        const snapshot = await resolveProjectPhase({
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          episodeId: ctx.context.episodeId || null,
-          currentStage: ctx.context.currentStage || null,
-        })
-        writeOperationDataPart<ProjectPhasePartData>(ctx.writer, 'data-project-phase', {
-          phase: snapshot.phase,
-          snapshot,
-        })
-        return snapshot
-      },
-    },
-    get_project_snapshot: {
-      description: 'Load a lightweight project snapshot projection suitable for planning and prompt context.',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({}),
-      execute: async (ctx) => assembleProjectProjectionLite({
-        projectId: ctx.projectId,
-        userId: ctx.userId,
-        episodeId: ctx.context.episodeId || null,
-        currentStage: ctx.context.currentStage || null,
-      }),
-    },
-    get_project_context: {
-      description: 'Load the current project and episode context snapshot.',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({}),
-      execute: async (ctx) => {
-        const projectContext = await assembleProjectContext({
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          episodeId: ctx.context.episodeId || null,
-          currentStage: ctx.context.currentStage || null,
-        })
-        writeOperationDataPart<ProjectContextPartData>(ctx.writer, 'data-project-context', {
-          context: buildAssistantProjectContextSnapshot(projectContext),
-        })
-        return buildAssistantProjectContextSnapshot(projectContext)
-      },
-    },
-    list_workflow_packages: {
-      description: 'List available workflow packages and skill catalog entries.',
-      sideEffects: { mode: 'query', risk: 'none' },
-      inputSchema: z.object({
-        documentPath: z.string().min(1).optional(),
-        maxChars: z.number().int().positive().max(20000).optional(),
-      }),
-      execute: async (_, input) => {
-        const payload = {
-          workflows: listWorkflowPackages().map((workflowPackage) => ({
-            id: workflowPackage.manifest.id,
-            name: workflowPackage.manifest.name,
-            summary: workflowPackage.manifest.summary,
-            requiresApproval: workflowPackage.manifest.requiresApproval,
-            skills: workflowPackage.steps.map((step) => step.skillId),
-          })),
-          catalog: listSkillCatalogEntries(),
-        }
-
-        const documentPath = normalizeString(input.documentPath)
-        if (!documentPath) return payload
-
-        const content = readSkillCatalogDocument(documentPath)
-        const limit = Math.max(200, Math.min(20000, input.maxChars ?? 6000))
-        return {
-          ...payload,
-          document: {
-            documentPath,
-            truncated: content.length > limit,
-            content: content.slice(0, limit),
-          },
-        }
-      },
-    },
-    list_saved_skills: {
-      description: 'List saved skills (plan templates) for the current user within this project.',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({
-        limit: z.number().int().positive().max(50).optional(),
-      }),
-      execute: async (ctx, input) => {
-        const items = await listSavedSkills({
-          userId: ctx.userId,
-          projectId: ctx.projectId,
-          limit: input.limit ?? 20,
-        })
-        return items.map((item) => ({
-          id: item.id,
-          name: item.name,
-          summary: item.summary,
-          kind: item.kind,
-          projectId: item.projectId,
-          createdAt: item.createdAt.toISOString(),
-          updatedAt: item.updatedAt.toISOString(),
-        }))
-      },
-    },
-    save_workflow_plan_as_skill: {
-      description: 'Save an existing workflow execution plan as a reusable saved skill template.',
-      sideEffects: { mode: 'act', risk: 'low' },
-      inputSchema: z.object({
-        planId: z.string().min(1),
-        name: z.string().min(1),
-        summary: z.string().optional(),
-      }),
-      execute: async (ctx, input) => {
-        const saved = await saveWorkflowPlanTemplateFromExecutionPlan({
-          userId: ctx.userId,
-          projectId: ctx.projectId,
-          planId: input.planId,
-          name: input.name,
-          summary: input.summary ?? null,
-        })
-        return {
-          id: saved.id,
-          name: saved.name,
-          summary: saved.summary,
-          kind: saved.kind,
-          projectId: saved.projectId,
-          createdAt: saved.createdAt.toISOString(),
-          updatedAt: saved.updatedAt.toISOString(),
-        }
-      },
-    },
-    create_workflow_plan_from_saved_skill: {
-      description: 'Create a workflow plan from a saved skill template (workflow_plan_template).',
-      sideEffects: { mode: 'plan', risk: 'low' },
-      inputSchema: z.object({
-        savedSkillId: z.string().min(1),
-        episodeId: z.string().optional(),
-      }),
-      execute: async (ctx, input) => {
-        const saved = await getSavedSkill({
-          userId: ctx.userId,
-          savedSkillId: input.savedSkillId,
-        })
-        if (!saved) throw new Error('SAVED_SKILL_NOT_FOUND')
-        if (saved.projectId && saved.projectId !== ctx.projectId) {
-          throw new Error('SAVED_SKILL_PROJECT_MISMATCH')
-        }
-        if (saved.kind !== SAVED_SKILL_KIND_WORKFLOW_PLAN_TEMPLATE) {
-          throw new Error('SAVED_SKILL_KIND_UNSUPPORTED')
-        }
-        if (!isRecord(saved.data)) {
-          throw new Error('SAVED_SKILL_DATA_INVALID')
-        }
-        const workflowIdRaw = normalizeString(saved.data.workflowId)
-        if (workflowIdRaw !== 'story-to-script' && workflowIdRaw !== 'script-to-storyboard') {
-          throw new Error('SAVED_SKILL_WORKFLOW_ID_INVALID')
-        }
-        const content = normalizeString(saved.data.content)
-        const episodeId = normalizeString(input.episodeId)
-          || normalizeString(saved.data.episodeId)
-          || normalizeString(ctx.context.episodeId)
-          || undefined
-
-        const result = await executeProjectCommand({
-          request: ctx.request,
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          body: {
-            commandType: 'run_workflow_package',
-            source: 'assistant-panel',
-            workflowId: workflowIdRaw,
-            ...(episodeId ? { episodeId } : {}),
-            input: {
-              ...(content ? { content } : {}),
-            },
-          },
-        })
-
-        const planData: WorkflowPlanPartData = {
-          workflowId: workflowIdRaw,
-          commandId: result.commandId,
-          planId: result.planId,
-          summary: buildWorkflowPlanSummary(workflowIdRaw),
-          requiresApproval: result.requiresApproval,
-          event: buildWorkflowPlanCanonicalEvent({
-            workflowId: workflowIdRaw,
-            commandId: result.commandId,
-            planId: result.planId,
-          }),
-          steps: result.steps.map((step) => ({
-            skillId: step.skillId,
-            title: step.title,
-          })),
-        }
-        writeOperationDataPart(ctx.writer, 'data-workflow-plan', planData)
-        if (result.requiresApproval) {
-          const approvalData: ApprovalRequestPartData = {
-            workflowId: workflowIdRaw,
-            commandId: result.commandId,
-            planId: result.planId,
-            summary: buildWorkflowApprovalSummary(workflowIdRaw),
-            reasons: buildWorkflowApprovalReasons(result.steps),
-            event: buildWorkflowApprovalCanonicalEvent({
-              workflowId: workflowIdRaw,
-              planId: result.planId,
-              status: 'pending',
-            }),
-          }
-          writeOperationDataPart(ctx.writer, 'data-approval-request', approvalData)
-        } else {
-          const statusData: WorkflowStatusPartData = {
-            workflowId: workflowIdRaw,
-            commandId: result.commandId,
-            planId: result.planId,
-            runId: result.linkedRunId,
-            status: result.status,
-            activeSkillId: result.steps[0]?.skillId as WorkflowStatusPartData['activeSkillId'],
-            event: result.linkedRunId
-              ? buildRunLifecycleCanonicalEvent({
-                  workflowId: workflowIdRaw,
-                  runId: result.linkedRunId,
-                  status: 'start',
-                })
-              : null,
-          }
-          writeOperationDataPart(ctx.writer, 'data-workflow-status', statusData)
-        }
-
-        return {
-          ...result,
-          savedSkillId: saved.id,
-          savedSkillName: saved.name,
-        }
-      },
-    },
-    create_workflow_plan: {
-      description: 'Create a persisted command and plan for a fixed workflow package.',
-      sideEffects: { mode: 'plan', risk: 'low' },
-      inputSchema: z.object({
-        workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-        episodeId: z.string().optional(),
-        content: z.string().optional(),
-      }),
-      execute: async (ctx, input) => {
-        const result = await executeProjectCommand({
-          request: ctx.request,
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          body: {
-            commandType: 'run_workflow_package',
-            source: 'assistant-panel',
-            workflowId: input.workflowId,
-            episodeId: input.episodeId || ctx.context.episodeId || undefined,
-            input: {
-              ...(input.content ? { content: input.content } : {}),
-            },
-          },
-        })
-        const planData: WorkflowPlanPartData = {
-          workflowId: input.workflowId,
-          commandId: result.commandId,
-          planId: result.planId,
-          summary: buildWorkflowPlanSummary(input.workflowId),
-          requiresApproval: result.requiresApproval,
-          event: buildWorkflowPlanCanonicalEvent({
-            workflowId: input.workflowId,
-            commandId: result.commandId,
-            planId: result.planId,
-          }),
-          steps: result.steps.map((step) => ({
-            skillId: step.skillId,
-            title: step.title,
-          })),
-        }
-        writeOperationDataPart(ctx.writer, 'data-workflow-plan', planData)
-        if (result.requiresApproval) {
-          const approvalData: ApprovalRequestPartData = {
-            workflowId: input.workflowId,
-            commandId: result.commandId,
-            planId: result.planId,
-            summary: buildWorkflowApprovalSummary(input.workflowId),
-            reasons: buildWorkflowApprovalReasons(result.steps),
-            event: buildWorkflowApprovalCanonicalEvent({
-              workflowId: input.workflowId,
-              planId: result.planId,
-              status: 'pending',
-            }),
-          }
-          writeOperationDataPart(ctx.writer, 'data-approval-request', approvalData)
-        } else {
-          const statusData: WorkflowStatusPartData = {
-            workflowId: input.workflowId,
-            commandId: result.commandId,
-            planId: result.planId,
-            runId: result.linkedRunId,
-            status: result.status,
-            activeSkillId: result.steps[0]?.skillId as WorkflowStatusPartData['activeSkillId'],
-            event: result.linkedRunId
-              ? buildRunLifecycleCanonicalEvent({
-                  workflowId: input.workflowId,
-                  runId: result.linkedRunId,
-                  status: 'start',
-                })
-              : null,
-          }
-          writeOperationDataPart(ctx.writer, 'data-workflow-status', statusData)
-        }
-        return result
-      },
-    },
-    approve_plan: {
-      description: 'Approve a pending workflow plan and enqueue execution.',
-      sideEffects: {
-        mode: 'plan',
-        risk: 'high',
-        billable: true,
-        requiresConfirmation: true,
-        confirmationSummary: '将批准并执行 workflow plan（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
-      },
-      inputSchema: z.object({
-        planId: z.string().min(1),
-        workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-        confirmed: z.boolean().optional(),
-      }),
-      execute: async (ctx, input) => {
-        const result = await approveProjectPlan({
-          request: ctx.request,
-          userId: ctx.userId,
-          planId: input.planId,
-        })
-        writeOperationDataPart<WorkflowStatusPartData>(ctx.writer, 'data-workflow-status', {
-          workflowId: input.workflowId,
-          commandId: result.commandId,
-          planId: result.planId,
-          runId: result.linkedRunId,
-          status: result.status,
-          activeSkillId: result.steps[0]?.skillId as WorkflowStatusPartData['activeSkillId'],
-          event: result.linkedRunId
-            ? buildRunLifecycleCanonicalEvent({
-                workflowId: input.workflowId,
-                runId: result.linkedRunId,
-                status: 'start',
-              })
-            : null,
-        })
-        return result
-      },
-    },
-    reject_plan: {
-      description: 'Reject a pending workflow plan.',
-      sideEffects: { mode: 'plan', risk: 'low' },
-      inputSchema: z.object({
-        planId: z.string().min(1),
-        note: z.string().optional(),
-      }),
-      execute: async (_, input) => rejectProjectPlan({
-        planId: input.planId,
-        note: input.note,
-      }),
-    },
-    list_recent_commands: {
-      description: 'List recent command and run status for the current project or episode.',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({
-        limit: z.number().int().positive().max(20).optional(),
-      }),
-      execute: async (ctx, input) =>
-        listProjectCommands({
-          projectId: ctx.projectId,
-          episodeId: ctx.context.episodeId || null,
-          limit: input.limit || 10,
-        }),
-    },
-    list_recent_mutation_batches: {
-      description: 'List recent mutation batches that can be reverted (undo).',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({
-        limit: z.number().int().positive().max(20).optional(),
-      }),
-      execute: async (ctx, input) => {
-        const batches = await listRecentMutationBatches({
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          limit: input.limit || 10,
-        })
-        return batches.map((batch) => ({
-          id: batch.id,
-          status: batch.status,
-          source: batch.source,
-          operationId: batch.operationId,
-          summary: batch.summary,
-          createdAt: batch.createdAt.toISOString(),
-          revertedAt: batch.revertedAt ? batch.revertedAt.toISOString() : null,
-          entryCount: batch.entries.length,
-          entries: batch.entries.map((entry) => ({
-            id: entry.id,
-            kind: entry.kind,
-            targetType: entry.targetType,
-            targetId: entry.targetId,
-            createdAt: entry.createdAt.toISOString(),
-          })),
-        }))
-      },
-    },
-    revert_mutation_batch: {
-      description: 'Revert (undo) a mutation batch by id.',
-      sideEffects: {
-        mode: 'plan',
-        risk: 'high',
-        requiresConfirmation: true,
-        confirmationSummary: '将撤回一次批量变更（可能删除或覆盖已有内容）。确认继续后请重新调用并传入 confirmed=true。',
-      },
-      inputSchema: z.object({
-        confirmed: z.boolean().optional(),
-        batchId: z.string().min(1),
-      }),
-      execute: async (ctx, input) => revertMutationBatch({
-        batchId: input.batchId,
-        projectId: ctx.projectId,
-        userId: ctx.userId,
-      }),
-    },
-    fetch_workflow_preview: {
-      description: 'Load a rendered preview for the latest workflow artifacts.',
-      sideEffects: { mode: 'query', risk: 'low' },
-      inputSchema: z.object({
-        workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
-        episodeId: z.string().optional(),
-      }),
-      execute: async (ctx, input) => {
-        const resolvedEpisodeId = input.episodeId || ctx.context.episodeId || ''
-        if (!resolvedEpisodeId) {
-          throw new Error('PROJECT_AGENT_EPISODE_REQUIRED')
-        }
-        if (input.workflowId === 'story-to-script') {
-          const preview = await loadScriptPreview({ episodeId: resolvedEpisodeId })
-          writeOperationDataPart<ScriptPreviewPartData>(ctx.writer, 'data-script-preview', preview)
-          return preview
-        }
-        const preview = await loadStoryboardPreview({ episodeId: resolvedEpisodeId })
-        writeOperationDataPart<StoryboardPreviewPartData>(ctx.writer, 'data-storyboard-preview', preview)
-        return preview
-      },
-    },
-    get_task_status: {
-      description: 'Query task target states for one or more project targets.',
-      sideEffects: { mode: 'query', risk: 'none' },
-      inputSchema: z.object({
-        targets: z.array(taskTargetSchema).min(1).max(50),
-      }),
-      execute: async (ctx, input) => ({
-        states: await queryTaskTargetStates({
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          targets: input.targets,
-        }),
-      }),
-    },
+    ...createReadOperations(),
+    ...createPlanOperations(),
+    ...createGovernanceOperations(),
+    ...createEditOperations(),
+    ...createGuiOperations(),
+    ...createExtraOperations(),
     generate_character_image: {
+      id: 'generate_character_image',
       description: 'Generate character appearance images for a project character.',
       sideEffects: {
         mode: 'act',
         risk: 'medium',
         billable: true,
         requiresConfirmation: true,
+        longRunning: true,
         confirmationSummary: '将为角色生成形象图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'asset',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         characterId: z.string().min(1).optional(),
         characterName: z.string().min(1).optional(),
         appearanceId: z.string().min(1).optional(),
         appearanceIndex: z.number().int().min(0).max(20).optional(),
-        count: z.number().int().positive().max(4).optional(),
+        count: z.number().int().positive().max(6).optional(),
         imageIndex: z.number().int().min(0).max(20).optional(),
         artStyle: z.string().optional(),
       }).refine((value) => Boolean(value.characterId || value.characterName), {
         message: 'characterId or characterName is required',
         path: ['characterId'],
       }),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
 
@@ -859,7 +427,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'generate_character_image',
           summary: `generate_character_image:${characterId}`,
           entries: [
@@ -894,25 +462,29 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     generate_location_image: {
+      id: 'generate_location_image',
       description: 'Generate location images for a project location.',
       sideEffects: {
         mode: 'act',
         risk: 'medium',
         billable: true,
         requiresConfirmation: true,
+        longRunning: true,
         confirmationSummary: '将为场景生成图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'asset',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         locationId: z.string().min(1).optional(),
         locationName: z.string().min(1).optional(),
-        count: z.number().int().positive().max(4).optional(),
+        count: z.number().int().positive().max(6).optional(),
         imageIndex: z.number().int().min(0).max(50).optional(),
         artStyle: z.string().optional(),
       }).refine((value) => Boolean(value.locationId || value.locationName), {
         message: 'locationId or locationName is required',
         path: ['locationId'],
       }),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
 
@@ -971,7 +543,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'generate_location_image',
           summary: `generate_location_image:${locationId}`,
           entries: [
@@ -1004,20 +576,26 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     modify_asset_image: {
+      id: 'modify_asset_image',
       description: 'Modify an asset image (character/location) using edit model (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         billable: true,
         requiresConfirmation: true,
+        overwrite: true,
+        destructive: true,
+        longRunning: true,
         confirmationSummary: '将修改资源图片（可能覆盖现有结果且可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'asset',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         type: z.enum(['character', 'location']),
         characterId: z.string().min(1).optional(),
         locationId: z.string().min(1).optional(),
       }).passthrough(),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const type = input.type
         const assetId = type === 'character'
@@ -1050,7 +628,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'modify_asset_image',
           summary: `modify_asset_image:${type}:${assetId}`,
           entries: [
@@ -1084,14 +662,17 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     regenerate_panel_image: {
+      id: 'regenerate_panel_image',
       description: 'Regenerate storyboard panel images (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'medium',
         billable: true,
         requiresConfirmation: true,
+        longRunning: true,
         confirmationSummary: '将为分镜格子重新生成图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'panel',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         panelId: z.string().min(1).optional(),
@@ -1102,6 +683,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         message: 'panelId or (storyboardId + panelIndex) is required',
         path: ['panelId'],
       }),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
 
@@ -1175,7 +757,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'regenerate_panel_image',
           summary: `regenerate_panel_image:${panelId}`,
           entries: [
@@ -1204,14 +786,17 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     panel_variant: {
+      id: 'panel_variant',
       description: 'Insert a variant panel after an existing panel and enqueue image generation (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         billable: true,
         requiresConfirmation: true,
+        longRunning: true,
         confirmationSummary: '将创建新的分镜格并生成变体图片（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'storyboard',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         storyboardId: z.string().min(1),
@@ -1219,6 +804,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         sourcePanelId: z.string().min(1),
         variant: z.record(z.unknown()),
       }).passthrough(),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
         const storyboardId = input.storyboardId.trim()
@@ -1350,7 +936,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'panel_variant',
           summary: `panel_variant:${createdPanel.id}`,
           entries: [
@@ -1379,32 +965,277 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     mutate_storyboard: {
+      id: 'mutate_storyboard',
       description: 'Apply storyboard mutations (insert panel / update prompts / reorder panels).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         requiresConfirmation: true,
+        overwrite: true,
+        bulk: true,
+        destructive: true,
         confirmationSummary: '将对分镜进行编辑/重排/插入新格子（可能删除或覆盖内容；插入可能消耗额度）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'storyboard',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
-        action: z.enum(['insert_panel', 'update_panel_prompt', 'reorder_panels']),
+        action: z.enum([
+          'insert_panel',
+          'update_panel_prompt',
+          'reorder_panels',
+          'create_panel',
+          'select_panel_candidate',
+          'cancel_panel_candidates',
+          'delete_panel',
+          'update_panel_fields',
+        ]),
         storyboardId: z.string().min(1),
         insertAfterPanelId: z.string().min(1).optional(),
         panelId: z.string().min(1).optional(),
         panelIndex: z.number().int().min(0).max(2000).optional(),
+        panelNumber: z.unknown().optional(),
+        shotType: z.string().nullable().optional(),
+        cameraMove: z.string().nullable().optional(),
+        description: z.string().nullable().optional(),
+        location: z.string().nullable().optional(),
+        characters: z.string().nullable().optional(),
+        props: z.string().nullable().optional(),
+        srtStart: z.unknown().optional(),
+        srtEnd: z.unknown().optional(),
+        duration: z.unknown().optional(),
+        linkedToNextPanel: z.unknown().optional(),
         userInput: z.string().optional(),
         prompt: z.string().optional(),
         videoPrompt: z.string().nullable().optional(),
         firstLastFramePrompt: z.string().nullable().optional(),
         imagePrompt: z.string().nullable().optional(),
+        selectedImageUrl: z.string().optional(),
+        actingNotes: z.unknown().optional(),
+        photographyRules: z.unknown().optional(),
         orderedPanelIds: z.array(z.string().min(1)).min(1).optional(),
       }).passthrough(),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
         const storyboardId = input.storyboardId.trim()
 
-        if (input.action === 'update_panel_prompt') {
+        if (input.action === 'select_panel_candidate' || input.action === 'cancel_panel_candidates') {
+          const panelId = normalizeString(input.panelId)
+          if (!panelId) {
+            throw new Error('PROJECT_AGENT_PANEL_REQUIRED')
+          }
+
+          const panel = await prisma.projectPanel.findFirst({
+            where: {
+              id: panelId,
+              storyboard: {
+                episode: {
+                  projectId: ctx.projectId,
+                },
+              },
+            },
+            select: {
+              id: true,
+              imageUrl: true,
+              imageHistory: true,
+              candidateImages: true,
+            },
+          })
+          if (!panel) {
+            throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+          }
+
+          if (input.action === 'cancel_panel_candidates') {
+            const previousCandidateImages = panel.candidateImages
+            await prisma.projectPanel.update({
+              where: { id: panelId },
+              data: { candidateImages: null },
+            })
+
+            const mutationBatch = await createMutationBatch({
+              projectId: ctx.projectId,
+              userId: ctx.userId,
+              source: ctx.source,
+              operationId: 'mutate_storyboard',
+              summary: `cancel_panel_candidates:${panelId}`,
+              entries: [
+                {
+                  kind: 'panel_candidates_restore',
+                  targetType: 'ProjectPanel',
+                  targetId: panelId,
+                  payload: {
+                    previousCandidateImages,
+                  },
+                },
+              ],
+            })
+
+            return { success: true, panelId, mutationBatchId: mutationBatch.id }
+          }
+
+          const selectedImageUrl = normalizeString(input.selectedImageUrl)
+          if (!selectedImageUrl) {
+            throw new Error('PROJECT_AGENT_SELECTED_IMAGE_REQUIRED')
+          }
+
+          const candidateImages = parseUnknownArray(panel.candidateImages)
+          const selectedCosKey = await resolveStorageKeyFromMediaValue(selectedImageUrl)
+          const candidateKeys = (await Promise.all(
+            candidateImages.map((candidate: unknown) => resolveStorageKeyFromMediaValue(candidate)),
+          )).filter((key): key is string => !!key)
+
+          if (!selectedCosKey || !candidateKeys.includes(selectedCosKey)) {
+            throw new Error('PROJECT_AGENT_PANEL_CANDIDATE_INVALID')
+          }
+
+          const currentHistory = parsePanelHistory(panel.imageHistory)
+          if (panel.imageUrl) {
+            currentHistory.push({
+              url: panel.imageUrl,
+              timestamp: new Date().toISOString(),
+            })
+          }
+
+          let finalImageKey = selectedCosKey
+          const isReusableKey = !finalImageKey.startsWith('http://')
+            && !finalImageKey.startsWith('https://')
+            && !finalImageKey.startsWith('/')
+
+          if (!isReusableKey) {
+            const sourceUrl = toFetchableUrl(selectedImageUrl)
+            const cosKey = generateUniqueKey(`panel-${panelId}-selected`, 'png')
+            finalImageKey = await downloadAndUploadImage(sourceUrl, cosKey)
+          }
+
+          const signedUrl = getSignedUrl(finalImageKey, 7 * 24 * 3600)
+          const previousCandidateImages = panel.candidateImages
+          const previousImageUrl = panel.imageUrl
+          const previousImageHistory = panel.imageHistory
+
+          await prisma.projectPanel.update({
+            where: { id: panelId },
+            data: {
+              imageUrl: finalImageKey,
+              imageHistory: JSON.stringify(currentHistory),
+              candidateImages: null,
+            },
+          })
+
+          const mutationBatch = await createMutationBatch({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            source: ctx.source,
+            operationId: 'mutate_storyboard',
+            summary: `select_panel_candidate:${panelId}`,
+            entries: [
+              {
+                kind: 'panel_candidate_select_restore',
+                targetType: 'ProjectPanel',
+                targetId: panelId,
+                payload: {
+                  previousImageUrl,
+                  previousImageHistory,
+                  previousCandidateImages,
+                },
+              },
+            ],
+          })
+
+          return {
+            success: true,
+            panelId,
+            imageUrl: signedUrl,
+            cosKey: finalImageKey,
+            mutationBatchId: mutationBatch.id,
+          }
+        }
+
+        const storyboard = await prisma.projectStoryboard.findFirst({
+          where: {
+            id: storyboardId,
+            episode: {
+              projectId: ctx.projectId,
+            },
+          },
+          select: { id: true },
+        })
+        if (!storyboard) {
+          throw new Error('PROJECT_AGENT_STORYBOARD_NOT_FOUND')
+        }
+
+        if (input.action === 'create_panel') {
+          const createdPanel = await prisma.$transaction(async (tx) => {
+            const maxPanel = await tx.projectPanel.findFirst({
+              where: { storyboardId },
+              orderBy: { panelIndex: 'desc' },
+              select: { panelIndex: true },
+            })
+            const nextPanelIndex = (maxPanel?.panelIndex ?? -1) + 1
+
+            const hasSrtStart = Object.prototype.hasOwnProperty.call(input, 'srtStart')
+            const hasSrtEnd = Object.prototype.hasOwnProperty.call(input, 'srtEnd')
+            const hasDuration = Object.prototype.hasOwnProperty.call(input, 'duration')
+
+            const panel = await tx.projectPanel.create({
+              data: {
+                storyboardId,
+                panelIndex: nextPanelIndex,
+                panelNumber: nextPanelIndex + 1,
+                shotType: input.shotType ?? null,
+                cameraMove: input.cameraMove ?? null,
+                description: input.description ?? null,
+                location: input.location ?? null,
+                characters: input.characters ?? null,
+                props: input.props ?? null,
+                ...(hasSrtStart ? { srtStart: parseNullableNumberField(input.srtStart) } : {}),
+                ...(hasSrtEnd ? { srtEnd: parseNullableNumberField(input.srtEnd) } : {}),
+                ...(hasDuration ? { duration: parseNullableNumberField(input.duration) } : {}),
+                ...(Object.prototype.hasOwnProperty.call(input, 'videoPrompt') ? { videoPrompt: input.videoPrompt } : {}),
+                ...(Object.prototype.hasOwnProperty.call(input, 'firstLastFramePrompt') ? { firstLastFramePrompt: input.firstLastFramePrompt } : {}),
+              },
+            })
+
+            const panelCount = await tx.projectPanel.count({
+              where: { storyboardId },
+            })
+
+            await tx.projectStoryboard.update({
+              where: { id: storyboardId },
+              data: { panelCount },
+            })
+
+            return panel
+          })
+
+          const mutationBatch = await createMutationBatch({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            source: ctx.source,
+            operationId: 'mutate_storyboard',
+            summary: `create_panel:${createdPanel.id}`,
+            entries: [
+              {
+                kind: 'panel_create_delete',
+                targetType: 'ProjectPanel',
+                targetId: createdPanel.id,
+                payload: {
+                  storyboardId,
+                  panelIndex: createdPanel.panelIndex,
+                },
+              },
+            ],
+          })
+
+          return {
+            success: true,
+            panel: createdPanel,
+            panelId: createdPanel.id,
+            storyboardId,
+            mutationBatchId: mutationBatch.id,
+          }
+        }
+
+        if (input.action === 'delete_panel') {
           let panelId = normalizeString(input.panelId)
           if (!panelId) {
             if (typeof input.panelIndex !== 'number' || !Number.isFinite(input.panelIndex)) {
@@ -1423,8 +1254,345 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
             throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
           }
 
-          const before = await prisma.projectPanel.findUnique({
-            where: { id: panelId },
+          const panel = await prisma.projectPanel.findFirst({
+            where: { id: panelId, storyboardId },
+            select: {
+              id: true,
+              storyboardId: true,
+              panelIndex: true,
+              panelNumber: true,
+              shotType: true,
+              cameraMove: true,
+              description: true,
+              location: true,
+              characters: true,
+              props: true,
+              srtSegment: true,
+              srtStart: true,
+              srtEnd: true,
+              duration: true,
+              imagePrompt: true,
+              imageUrl: true,
+              imageMediaId: true,
+              imageHistory: true,
+              videoPrompt: true,
+              firstLastFramePrompt: true,
+              videoUrl: true,
+              videoGenerationMode: true,
+              videoMediaId: true,
+              sceneType: true,
+              candidateImages: true,
+              linkedToNextPanel: true,
+              lipSyncTaskId: true,
+              lipSyncVideoUrl: true,
+              lipSyncVideoMediaId: true,
+              sketchImageUrl: true,
+              sketchImageMediaId: true,
+              photographyRules: true,
+              actingNotes: true,
+              previousImageUrl: true,
+              previousImageMediaId: true,
+            },
+          })
+          if (!panel) {
+            throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+          }
+
+          await prisma.$transaction(async (tx) => {
+            await tx.projectPanel.delete({
+              where: { id: panelId },
+            })
+
+            const maxPanel = await tx.projectPanel.findFirst({
+              where: { storyboardId },
+              orderBy: { panelIndex: 'desc' },
+              select: { panelIndex: true },
+            })
+            const maxPanelIndex = maxPanel?.panelIndex ?? -1
+            const offset = maxPanelIndex + 1000
+
+            await tx.projectPanel.updateMany({
+              where: {
+                storyboardId,
+                panelIndex: { gt: panel.panelIndex },
+              },
+              data: {
+                panelIndex: { increment: offset },
+                panelNumber: { increment: offset },
+              },
+            })
+
+            await tx.projectPanel.updateMany({
+              where: {
+                storyboardId,
+                panelIndex: { gt: panel.panelIndex + offset },
+              },
+              data: {
+                panelIndex: { decrement: offset + 1 },
+                panelNumber: { decrement: offset + 1 },
+              },
+            })
+
+            const panelCount = await tx.projectPanel.count({
+              where: { storyboardId },
+            })
+            await tx.projectStoryboard.update({
+              where: { id: storyboardId },
+              data: { panelCount },
+            })
+          })
+
+          const mutationBatch = await createMutationBatch({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            source: ctx.source,
+            operationId: 'mutate_storyboard',
+            summary: `delete_panel:${panelId}`,
+            entries: [
+              {
+                kind: 'panel_delete_restore',
+                targetType: 'ProjectStoryboard',
+                targetId: storyboardId,
+                payload: {
+                  panel,
+                },
+              },
+            ],
+          })
+
+          return { success: true, panelId, storyboardId, mutationBatchId: mutationBatch.id }
+        }
+
+        if (input.action === 'update_panel_fields') {
+          let panelId = normalizeString(input.panelId)
+          const panelIndex = typeof input.panelIndex === 'number' && Number.isFinite(input.panelIndex)
+            ? input.panelIndex
+            : null
+
+          const updateData: Record<string, unknown> = {}
+          if (Object.prototype.hasOwnProperty.call(input, 'panelNumber')) {
+            const parsed = parseNullableNumberField(input.panelNumber)
+            updateData.panelNumber = parsed === null ? null : Math.trunc(parsed)
+          }
+          if (Object.prototype.hasOwnProperty.call(input, 'shotType')) updateData.shotType = input.shotType
+          if (Object.prototype.hasOwnProperty.call(input, 'cameraMove')) updateData.cameraMove = input.cameraMove
+          if (Object.prototype.hasOwnProperty.call(input, 'description')) updateData.description = input.description
+          if (Object.prototype.hasOwnProperty.call(input, 'location')) updateData.location = input.location
+          if (Object.prototype.hasOwnProperty.call(input, 'characters')) updateData.characters = input.characters
+          if (Object.prototype.hasOwnProperty.call(input, 'props')) updateData.props = input.props
+          if (Object.prototype.hasOwnProperty.call(input, 'srtStart')) updateData.srtStart = parseNullableNumberField(input.srtStart)
+          if (Object.prototype.hasOwnProperty.call(input, 'srtEnd')) updateData.srtEnd = parseNullableNumberField(input.srtEnd)
+          if (Object.prototype.hasOwnProperty.call(input, 'duration')) updateData.duration = parseNullableNumberField(input.duration)
+          if (Object.prototype.hasOwnProperty.call(input, 'videoPrompt')) updateData.videoPrompt = input.videoPrompt
+          if (Object.prototype.hasOwnProperty.call(input, 'firstLastFramePrompt')) updateData.firstLastFramePrompt = input.firstLastFramePrompt
+          if (Object.prototype.hasOwnProperty.call(input, 'linkedToNextPanel')) {
+            updateData.linkedToNextPanel = input.linkedToNextPanel === true
+          }
+          if (Object.prototype.hasOwnProperty.call(input, 'actingNotes')) updateData.actingNotes = toStructuredJsonField(input.actingNotes, 'actingNotes')
+          if (Object.prototype.hasOwnProperty.call(input, 'photographyRules')) updateData.photographyRules = toStructuredJsonField(input.photographyRules, 'photographyRules')
+
+          if (Object.keys(updateData).length === 0) {
+            return { success: true, panelId: panelId || null, noop: true }
+          }
+
+              const existing = panelId
+            ? await prisma.projectPanel.findFirst({
+                where: { id: panelId, storyboardId },
+                select: {
+                  id: true,
+                  panelIndex: true,
+                  panelNumber: true,
+                  shotType: true,
+                  cameraMove: true,
+                  description: true,
+                  location: true,
+                  characters: true,
+                  props: true,
+                  srtStart: true,
+                  srtEnd: true,
+                  duration: true,
+                  videoPrompt: true,
+                  firstLastFramePrompt: true,
+                  linkedToNextPanel: true,
+                  actingNotes: true,
+                  photographyRules: true,
+                },
+              })
+            : panelIndex === null
+              ? null
+              : await prisma.projectPanel.findUnique({
+                  where: {
+                    storyboardId_panelIndex: {
+                      storyboardId,
+                      panelIndex,
+                    },
+                  },
+                  select: {
+                    id: true,
+                    panelIndex: true,
+                    panelNumber: true,
+                    shotType: true,
+                    cameraMove: true,
+                    description: true,
+                    location: true,
+                    characters: true,
+                    props: true,
+                    srtStart: true,
+                    srtEnd: true,
+                    duration: true,
+                    videoPrompt: true,
+                    firstLastFramePrompt: true,
+                    linkedToNextPanel: true,
+                    actingNotes: true,
+                    photographyRules: true,
+                  },
+                })
+
+          if (existing) {
+            panelId = existing.id
+            await prisma.projectPanel.update({
+              where: { id: existing.id },
+              data: updateData,
+            })
+
+            const mutationBatch = await createMutationBatch({
+              projectId: ctx.projectId,
+              userId: ctx.userId,
+              source: ctx.source,
+              operationId: 'mutate_storyboard',
+              summary: `update_panel_fields:${existing.id}`,
+              entries: [
+                {
+                  kind: 'panel_fields_restore',
+                  targetType: 'ProjectPanel',
+                  targetId: existing.id,
+                  payload: {
+                    previous: existing,
+                  },
+                },
+              ],
+            })
+
+            return { success: true, panelId: existing.id, storyboardId, mutationBatchId: mutationBatch.id }
+          }
+
+          if (panelIndex === null) {
+            throw new Error('PROJECT_AGENT_PANEL_REQUIRED')
+          }
+
+          const createdPanel = await prisma.projectPanel.create({
+            data: {
+              storyboardId,
+              panelIndex,
+              panelNumber: panelIndex + 1,
+              imageUrl: null,
+              ...updateData,
+            },
+            select: { id: true, panelIndex: true },
+          })
+
+          const panelCount = await prisma.projectPanel.count({
+            where: { storyboardId },
+          })
+          await prisma.projectStoryboard.update({
+            where: { id: storyboardId },
+            data: { panelCount },
+          })
+
+          const mutationBatch = await createMutationBatch({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            source: ctx.source,
+            operationId: 'mutate_storyboard',
+            summary: `create_panel:${createdPanel.id}`,
+            entries: [
+              {
+                kind: 'panel_create_delete',
+                targetType: 'ProjectPanel',
+                targetId: createdPanel.id,
+                payload: {
+                  storyboardId,
+                  panelIndex: createdPanel.panelIndex,
+                },
+              },
+            ],
+          })
+
+          return { success: true, panelId: createdPanel.id, storyboardId, created: true, mutationBatchId: mutationBatch.id }
+        }
+
+        if (input.action === 'update_panel_prompt') {
+          let panelId = normalizeString(input.panelId)
+          if (!panelId) {
+            if (typeof input.panelIndex !== 'number' || !Number.isFinite(input.panelIndex)) {
+              throw new Error('PROJECT_AGENT_PANEL_REQUIRED')
+            }
+            const panel = await prisma.projectPanel.findFirst({
+              where: {
+                storyboardId,
+                panelIndex: input.panelIndex,
+              },
+              select: { id: true },
+            })
+            panelId = panel?.id || ''
+          }
+
+          const updateData: Record<string, unknown> = {}
+          if (Object.prototype.hasOwnProperty.call(input, 'videoPrompt')) updateData.videoPrompt = input.videoPrompt
+          if (Object.prototype.hasOwnProperty.call(input, 'firstLastFramePrompt')) updateData.firstLastFramePrompt = input.firstLastFramePrompt
+          if (Object.prototype.hasOwnProperty.call(input, 'imagePrompt')) updateData.imagePrompt = input.imagePrompt
+          if (Object.keys(updateData).length === 0) {
+            return { success: true, panelId, noop: true }
+          }
+
+          if (!panelId) {
+            if (typeof input.panelIndex !== 'number' || !Number.isFinite(input.panelIndex)) {
+              throw new Error('PROJECT_AGENT_PANEL_REQUIRED')
+            }
+
+            const createdPanel = await prisma.projectPanel.create({
+              data: {
+                storyboardId,
+                panelIndex: input.panelIndex,
+                panelNumber: input.panelIndex + 1,
+                imageUrl: null,
+                ...updateData,
+              },
+              select: { id: true, panelIndex: true },
+            })
+
+            const panelCount = await prisma.projectPanel.count({
+              where: { storyboardId },
+            })
+            await prisma.projectStoryboard.update({
+              where: { id: storyboardId },
+              data: { panelCount },
+            })
+
+            const mutationBatch = await createMutationBatch({
+              projectId: ctx.projectId,
+              userId: ctx.userId,
+              source: ctx.source,
+              operationId: 'mutate_storyboard',
+              summary: `create_panel:${createdPanel.id}`,
+              entries: [
+                {
+                  kind: 'panel_create_delete',
+                  targetType: 'ProjectPanel',
+                  targetId: createdPanel.id,
+                  payload: {
+                    storyboardId,
+                    panelIndex: createdPanel.panelIndex,
+                  },
+                },
+              ],
+            })
+
+            return { success: true, panelId: createdPanel.id, created: true, mutationBatchId: mutationBatch.id }
+          }
+
+          const before = await prisma.projectPanel.findFirst({
+            where: { id: panelId, storyboardId },
             select: {
               id: true,
               videoPrompt: true,
@@ -1436,14 +1604,6 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
             throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
           }
 
-          const updateData: Record<string, unknown> = {}
-          if (Object.prototype.hasOwnProperty.call(input, 'videoPrompt')) updateData.videoPrompt = input.videoPrompt
-          if (Object.prototype.hasOwnProperty.call(input, 'firstLastFramePrompt')) updateData.firstLastFramePrompt = input.firstLastFramePrompt
-          if (Object.prototype.hasOwnProperty.call(input, 'imagePrompt')) updateData.imagePrompt = input.imagePrompt
-          if (Object.keys(updateData).length === 0) {
-            return { success: true, panelId, noop: true }
-          }
-
           await prisma.projectPanel.update({
             where: { id: panelId },
             data: updateData,
@@ -1452,7 +1612,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           const mutationBatch = await createMutationBatch({
             projectId: ctx.projectId,
             userId: ctx.userId,
-            source: 'assistant-panel',
+            source: ctx.source,
             operationId: 'mutate_storyboard',
             summary: `update_panel_prompt:${panelId}`,
             entries: [
@@ -1525,7 +1685,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           const mutationBatch = await createMutationBatch({
             projectId: ctx.projectId,
             userId: ctx.userId,
-            source: 'assistant-panel',
+            source: ctx.source,
             operationId: 'mutate_storyboard',
             summary: `reorder_panels:${storyboardId}`,
             entries: [
@@ -1576,7 +1736,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'mutate_storyboard',
           summary: `insert_panel:${storyboardId}:${input.insertAfterPanelId}`,
           entries: [
@@ -1604,14 +1764,18 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     voice_generate: {
+      id: 'voice_generate',
       description: 'Generate voice line audio for one or more voice lines (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         billable: true,
         requiresConfirmation: true,
+        bulk: true,
+        longRunning: true,
         confirmationSummary: '将生成配音（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'episode',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         episodeId: z.string().min(1).optional(),
@@ -1619,6 +1783,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         all: z.boolean().optional(),
         audioModel: z.string().optional(),
       }),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
         const episodeId = normalizeString(input.episodeId) || normalizeString(ctx.context.episodeId)
@@ -1781,7 +1946,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'voice_generate',
           summary: `voice_generate:${episodeId}:${all ? 'all' : (lineId || 'single')}`,
           entries: voiceLines.map((line) => ({
@@ -1827,6 +1992,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     voice_design: {
+      id: 'voice_design',
       description: 'Design a new voice using a text prompt and preview text (async task submission).',
       sideEffects: {
         mode: 'act',
@@ -1835,6 +2001,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         requiresConfirmation: true,
         confirmationSummary: '将进行音色设计（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'project',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         voicePrompt: z.string().min(1),
@@ -1842,6 +2009,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         preferredName: z.string().optional(),
         language: z.enum(['zh', 'en']).optional(),
       }),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
         const voicePrompt = input.voicePrompt.trim()
@@ -1899,14 +2067,18 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     lip_sync: {
+      id: 'lip_sync',
       description: 'Generate lip-sync video for a storyboard panel using a voice line (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         billable: true,
         requiresConfirmation: true,
+        overwrite: true,
+        longRunning: true,
         confirmationSummary: '将进行口型同步（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'panel',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         storyboardId: z.string().min(1),
@@ -1914,6 +2086,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         voiceLineId: z.string().min(1),
         lipSyncModel: z.string().optional(),
       }).passthrough(),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
 
@@ -1971,7 +2144,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'lip_sync',
           summary: `lip_sync:${panel.id}:${voiceLineId}`,
           entries: [
@@ -2004,14 +2177,19 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       },
     },
     generate_video: {
+      id: 'generate_video',
       description: 'Generate panel videos for a storyboard panel or an episode batch (async task submission).',
       sideEffects: {
         mode: 'act',
         risk: 'high',
         billable: true,
         requiresConfirmation: true,
+        overwrite: true,
+        bulk: true,
+        longRunning: true,
         confirmationSummary: '将生成视频（可能消耗额度/产生计费）。确认继续后请重新调用并传入 confirmed=true。',
       },
+      scope: 'episode',
       inputSchema: z.object({
         confirmed: z.boolean().optional(),
         all: z.boolean().optional(),
@@ -2024,6 +2202,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         firstLastFrame: z.unknown().optional(),
         generationOptions: z.record(z.unknown()).optional(),
       }).passthrough(),
+      outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
         const inputRecord = isRecord(input) ? input : ({} as Record<string, unknown>)
@@ -2095,7 +2274,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           const mutationBatch = await createMutationBatch({
             projectId: ctx.projectId,
             userId: ctx.userId,
-            source: 'assistant-panel',
+            source: ctx.source,
             operationId: 'generate_video',
             summary: `generate_video:${episodeId}:batch`,
             entries: panels.map((panel) => ({
@@ -2169,7 +2348,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
         const mutationBatch = await createMutationBatch({
           projectId: ctx.projectId,
           userId: ctx.userId,
-          source: 'assistant-panel',
+          source: ctx.source,
           operationId: 'generate_video',
           summary: `generate_video:${panelId}`,
           entries: [

@@ -1,8 +1,7 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuth, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { TASK_TYPE } from '@/lib/task/types'
-import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST /api/projects/[projectId]/clips
@@ -26,23 +25,15 @@ export const POST = apiHandler(async (
   if (isErrorResponse(authResult)) return authResult
   const { session } = authResult
 
-  const asyncTaskResponse = await maybeSubmitLLMTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    userId: session.user.id,
+    operationId: 'clips_build',
     projectId,
-    episodeId,
-    type: TASK_TYPE.CLIPS_BUILD,
-    targetType: 'ProjectEpisode',
-    targetId: episodeId,
-    routePath: `/api/projects/${projectId}/clips`,
-    body: {
-      ...body,
-      displayMode: 'detail',
-    },
-    dedupeKey: `clips_build:${episodeId}`,
-    priority: 1,
+    userId: session.user.id,
+    context: { episodeId },
+    input: body,
+    source: 'project-ui',
   })
-  if (asyncTaskResponse) return asyncTaskResponse
 
-  throw new ApiError('INVALID_PARAMS')
+  return NextResponse.json(result)
 })

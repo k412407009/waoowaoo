@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler } from '@/lib/api-errors'
-import { forbidden, notFound, requireAuth } from '@/lib/api-auth'
+import { forbidden, notFound, requireUserAuth } from '@/lib/api-auth'
 import { prisma } from '@/lib/prisma'
 import { revertMutationBatch } from '@/lib/mutation-batch/revert'
 
@@ -9,7 +9,9 @@ export const POST = apiHandler(async (
   context: { params: Promise<{ batchId: string }> },
 ) => {
   const { batchId } = await context.params
-  const session = await requireAuth()
+  const authResult = await requireUserAuth()
+  if (authResult instanceof NextResponse) return authResult
+  const { session } = authResult
   const resolvedBatchId = batchId.trim()
   if (!resolvedBatchId) return notFound('MutationBatch')
 

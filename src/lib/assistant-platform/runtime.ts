@@ -123,7 +123,7 @@ export async function createAssistantChatResponse(input: {
     system: skill.systemPrompt(runtimeContext),
     messages: await toModelMessages(normalizedMessages),
     ...(tools ? { tools } : {}),
-    stopWhen: stepCountIs(skill.maxSteps ?? 4),
+    stopWhen: stepCountIs(skill.maxSteps ?? 120),
     temperature: skill.temperature ?? 0.2,
   })
 

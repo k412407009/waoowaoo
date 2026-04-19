@@ -1,10 +1,7 @@
-import { logInfo as _ulogInfo, logWarn as _ulogWarn } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { deleteObject } from '@/lib/storage'
-import { resolveStorageKeyFromMediaValue } from '@/lib/media/service'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST - 确认场景选择并删除未选中的候选图片
@@ -32,81 +29,16 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取场景及其图片
-  const location = await prisma.projectLocation.findUnique({
-    where: { id: locationId },
-    include: { images: { orderBy: { imageIndex: 'asc' } } }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'confirm_location_selection',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      locationId,
+    },
+    source: 'project-ui',
   })
 
-  if (!location) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const images = location.images || []
-
-  if (images.length <= 1) {
-    // 已经只有一张图片，无需操作
-    return NextResponse.json({
-      success: true,
-      message: '已确认选择',
-      deletedCount: 0
-    })
-  }
-
-  // 找到选中的图片
-  const selectedImage = location.selectedImageId
-    ? images.find((img) => img.id === location.selectedImageId)
-    : images.find((img) => img.isSelected)
-  if (!selectedImage) {
-    throw new ApiError('INVALID_PARAMS')
-  }
-
-  // 删除未选中的图片
-  const deletedImages: string[] = []
-  const imagesToDelete = images.filter((img) => img.id !== selectedImage.id)
-
-  for (const img of imagesToDelete) {
-    if (img.imageUrl) {
-      const key = await resolveStorageKeyFromMediaValue(img.imageUrl)
-      if (key) {
-        try {
-          await deleteObject(key)
-          deletedImages.push(key)
-        } catch {
-          _ulogWarn('Failed to delete COS image:', key)
-        }
-      }
-    }
-  }
-
-  // 在事务中更新数据库
-  await prisma.$transaction(async (tx) => {
-    // 删除未选中的图片记录（排除选中的图片 ID）
-    await tx.locationImage.deleteMany({
-      where: {
-        locationId,
-        id: { not: selectedImage.id }
-      }
-    })
-
-    // 更新选中图片的索引为 0
-    await tx.locationImage.update({
-      where: { id: selectedImage.id },
-      data: { imageIndex: 0 }
-    })
-
-    await tx.projectLocation.update({
-      where: { id: locationId },
-      data: { selectedImageId: selectedImage.id }
-    })
-  })
-
-  _ulogInfo(`✓ 场景确认选择: ${location.name}`)
-  _ulogInfo(`✓ 删除了 ${deletedImages.length} 张未选中的图片`)
-
-  return NextResponse.json({
-    success: true,
-    message: '已确认选择，其他候选图片已删除',
-    deletedCount: deletedImages.length
-  })
+  return NextResponse.json(result)
 })

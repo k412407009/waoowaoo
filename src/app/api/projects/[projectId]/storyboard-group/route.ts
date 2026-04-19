@@ -1,8 +1,7 @@
-import { logInfo as _ulogInfo } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST /api/projects/[projectId]/storyboard-group
@@ -25,89 +24,20 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取剧集和现有 clips
-  const episode = await prisma.projectEpisode.findUnique({
-    where: { id: episodeId },
-    include: {
-      clips: { orderBy: { createdAt: 'asc' } }
-    }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'create_storyboard_group',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      episodeId,
+      ...(insertIndex !== undefined ? { insertIndex } : {}),
+    },
+    source: 'project-ui',
   })
-
-  if (!episode) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const existingClips = episode.clips
-  const insertAt = insertIndex !== undefined ? insertIndex : existingClips.length
-
-  // 计算新 clip 的 createdAt 时间，用于排序
-  let newCreatedAt: Date
-
-  if (existingClips.length === 0) {
-    // 没有现有 clips，使用当前时间
-    newCreatedAt = new Date()
-  } else if (insertAt === 0) {
-    // 插入到开头，设置为第一个 clip 之前的时间
-    const firstClip = existingClips[0]
-    newCreatedAt = new Date(firstClip.createdAt.getTime() - 1000) // 减1秒
-  } else if (insertAt >= existingClips.length) {
-    // 插入到结尾，设置为最后一个 clip 之后的时间
-    const lastClip = existingClips[existingClips.length - 1]
-    newCreatedAt = new Date(lastClip.createdAt.getTime() + 1000) // 加1秒
-  } else {
-    // 插入到中间，设置为前后两个 clip 时间的中间值
-    const prevClip = existingClips[insertAt - 1]
-    const nextClip = existingClips[insertAt]
-    const midTime = (prevClip.createdAt.getTime() + nextClip.createdAt.getTime()) / 2
-    newCreatedAt = new Date(midTime)
-  }
-
-  // 使用事务创建 Clip + Storyboard + Panel
-  const result = await prisma.$transaction(async (tx) => {
-    // 1. 创建新的 Clip（手动添加类型）
-    const newClip = await tx.projectClip.create({
-      data: {
-        episodeId,
-        summary: '手动添加的分镜组',
-        content: '',
-        location: null,
-        characters: null,
-        createdAt: newCreatedAt
-      }
-    })
-
-    // 2. 创建关联的 Storyboard
-    const newStoryboard = await tx.projectStoryboard.create({
-      data: {
-        episodeId,
-        clipId: newClip.id,
-        panelCount: 1
-      }
-    })
-
-    // 3. 创建初始的 Panel
-    const newPanel = await tx.projectPanel.create({
-      data: {
-        storyboardId: newStoryboard.id,
-        panelIndex: 0,
-        panelNumber: 1,
-        shotType: '中景',
-        cameraMove: '固定',
-        description: '新镜头描述',
-        characters: '[]'
-      }
-    })
-
-    return { clip: newClip, storyboard: newStoryboard, panel: newPanel }
-  })
-
-  _ulogInfo(`[添加分镜组] episodeId=${episodeId}, clipId=${result.clip.id}, storyboardId=${result.storyboard.id}, insertAt=${insertAt}`)
 
   return NextResponse.json({
-    success: true,
-    clip: result.clip,
-    storyboard: result.storyboard,
-    panel: result.panel
+    ...result,
   })
 })
 
@@ -132,62 +62,18 @@ export const PUT = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取剧集和所有 clips（按 createdAt 排序）
-  const episode = await prisma.projectEpisode.findUnique({
-    where: { id: episodeId },
-    include: {
-      clips: { orderBy: { createdAt: 'asc' } }
-    }
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'move_storyboard_group',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      episodeId,
+      clipId,
+      direction,
+    },
+    source: 'project-ui',
   })
-
-  if (!episode) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const clips = episode.clips
-  const currentIndex = clips.findIndex(c => c.id === clipId)
-
-  if (currentIndex === -1) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  // 计算目标位置
-  const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
-
-  // 检查边界
-  if (targetIndex < 0 || targetIndex >= clips.length) {
-    throw new ApiError('INVALID_PARAMS')
-  }
-
-  const currentClip = clips[currentIndex]
-  const targetClip = clips[targetIndex]
-
-  // 交换两个 clip 的 createdAt（加减小量时间避免冲突）
-  const tempTime = currentClip.createdAt.getTime()
-  const targetTime = targetClip.createdAt.getTime()
-
-  // 使用事务更新
-  await prisma.$transaction(async (tx) => {
-    // 先把当前 clip 移到一个临时时间
-    await tx.projectClip.update({
-      where: { id: currentClip.id },
-      data: { createdAt: new Date(0) } // 临时时间
-    })
-
-    // 更新目标 clip 的时间
-    await tx.projectClip.update({
-      where: { id: targetClip.id },
-      data: { createdAt: new Date(tempTime) }
-    })
-
-    // 更新当前 clip 到目标时间
-    await tx.projectClip.update({
-      where: { id: currentClip.id },
-      data: { createdAt: new Date(targetTime) }
-    })
-  })
-
-  _ulogInfo(`[移动分镜组] clipId=${clipId}, direction=${direction}, ${currentIndex} -> ${targetIndex}`)
 
   return NextResponse.json({ success: true })
 })
@@ -213,40 +99,16 @@ export const DELETE = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取 storyboard 及其关联的 clip
-  const storyboard = await prisma.projectStoryboard.findUnique({
-    where: { id: storyboardId },
-    include: {
-      panels: true,
-      clip: true
-    }
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'delete_storyboard_group',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      storyboardId,
+    },
+    source: 'project-ui',
   })
-
-  if (!storyboard) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  // 使用事务删除（Prisma 的 cascade 会自动处理关联删除，但我们显式删除以确保一致性）
-  await prisma.$transaction(async (tx) => {
-    // 1. 删除所有关联的 Panels
-    await tx.projectPanel.deleteMany({
-      where: { storyboardId }
-    })
-
-    // 2. 删除 Storyboard
-    await tx.projectStoryboard.delete({
-      where: { id: storyboardId }
-    })
-
-    // 3. 删除关联的 Clip（如果存在）
-    if (storyboard.clipId) {
-      await tx.projectClip.delete({
-        where: { id: storyboard.clipId }
-      })
-    }
-  })
-
-  _ulogInfo(`[删除分镜组] storyboardId=${storyboardId}, clipId=${storyboard.clipId}, panelCount=${storyboard.panels.length}`)
 
   return NextResponse.json({ success: true })
 })

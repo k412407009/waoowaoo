@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight } from '@/lib/api-auth'
-import { submitAssetModifyTask } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
-type LegacyProjectModifyBody = Record<string, unknown> & {
-  type?: 'character' | 'location'
-  characterId?: string
-  locationId?: string
+function toObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+  return {}
 }
 
 export const POST = apiHandler(async (
@@ -17,26 +16,19 @@ export const POST = apiHandler(async (
   const authResult = await requireProjectAuthLight(projectId)
   if (isErrorResponse(authResult)) return authResult
 
-  const body = await request.json() as LegacyProjectModifyBody
-  const assetId = body.type === 'character'
-    ? body.characterId
-    : body.type === 'location'
-      ? body.locationId
-      : null
-  if ((body.type !== 'character' && body.type !== 'location') || typeof assetId !== 'string' || assetId.trim().length === 0) {
+  const body = toObject(await request.json().catch(() => ({})))
+  const type = body.type
+  if (type !== 'character' && type !== 'location') {
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const result = await submitAssetModifyTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    kind: body.type,
-    assetId,
-    body,
-    access: {
-      scope: 'project',
-      userId: authResult.session.user.id,
-      projectId,
-    },
+    operationId: 'modify_asset_image',
+    projectId,
+    userId: authResult.session.user.id,
+    input: body,
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)

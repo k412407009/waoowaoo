@@ -1,11 +1,10 @@
 import { logError as _ulogError } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { attachMediaFieldsToProject } from '@/lib/media/attach'
-import { resolveMediaRefFromLegacyValue } from '@/lib/media/service'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * GET - 获取单个剧集的完整数据
@@ -75,20 +74,20 @@ export const PATCH = apiHandler(async (
   const body = await request.json()
   const { name, description, novelText, audioUrl, srtContent } = body
 
-  const updateData: Prisma.ProjectEpisodeUncheckedUpdateInput = {}
-  if (name !== undefined) updateData.name = name.trim()
-  if (description !== undefined) updateData.description = description?.trim() || null
-  if (novelText !== undefined) updateData.novelText = novelText
-  if (audioUrl !== undefined) {
-    updateData.audioUrl = audioUrl
-    const media = await resolveMediaRefFromLegacyValue(audioUrl)
-    updateData.audioMediaId = media?.id || null
-  }
-  if (srtContent !== undefined) updateData.srtContent = srtContent
-
-  const episode = await prisma.projectEpisode.update({
-    where: { id: episodeId },
-    data: updateData
+  const episode = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'update_episode',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      episodeId,
+      ...(name !== undefined ? { name } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(novelText !== undefined ? { novelText } : {}),
+      ...(audioUrl !== undefined ? { audioUrl } : {}),
+      ...(srtContent !== undefined ? { srtContent } : {}),
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json({ episode })
@@ -107,29 +106,16 @@ export const DELETE = apiHandler(async (
   const authResult = await requireProjectAuthLight(projectId)
   if (isErrorResponse(authResult)) return authResult
 
-  // 删除剧集（关联数据会级联删除）
-  await prisma.projectEpisode.delete({
-    where: { id: episodeId }
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'delete_episode',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      episodeId,
+    },
+    source: 'project-ui',
   })
-
-  // 如果删除的是最后编辑的剧集，更新 lastEpisodeId
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { lastEpisodeId: true },
-  })
-
-  if (project?.lastEpisodeId === episodeId) {
-    // 找到另一个剧集作为默认
-    const anotherEpisode = await prisma.projectEpisode.findFirst({
-      where: { projectId },
-      orderBy: { episodeNumber: 'asc' }
-    })
-
-    await prisma.project.update({
-      where: { id: projectId },
-      data: { lastEpisodeId: anotherEpisode?.id || null }
-    })
-  }
 
   return NextResponse.json({ success: true })
 })

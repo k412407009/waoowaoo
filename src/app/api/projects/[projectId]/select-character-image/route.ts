@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight } from '@/lib/api-auth'
-import { selectAssetRender } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 type LegacyProjectCharacterSelectBody = {
   characterId?: string
@@ -22,18 +22,18 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const result = await selectAssetRender({
-    kind: 'character',
-    assetId: body.characterId,
-    body: {
-      appearanceId: body.appearanceId,
-      imageIndex: body.selectedIndex,
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'select_asset_render',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      type: 'character',
+      assetId: body.characterId,
+      ...(typeof body.appearanceId === 'string' ? { appearanceId: body.appearanceId } : {}),
+      ...(body.selectedIndex !== undefined ? { imageIndex: body.selectedIndex ?? null } : {}),
     },
-    access: {
-      scope: 'project',
-      userId: authResult.session.user.id,
-      projectId,
-    },
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)

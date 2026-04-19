@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * PATCH /api/projects/[projectId]/clips/[clipId]
@@ -20,31 +20,26 @@ export const PATCH = apiHandler(async (
 
     const body = await request.json()
     const { characters, location, props, content, screenplay } = body
-    const clipModel = prisma.projectClip as unknown as {
-        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>
-    }
 
     // 验证 Clip 是否存在且属于该项目（间接验证）
     // 这里简化处理，直接通过 ID 更新，Prisma 会处理是否存在
     // 严谨做法是先查 Clip -> Episode -> Project 确认归属，但考虑到 projectId 主要是路由参数校验，且用户只能删改自己的数据
 
-    const updateData: {
-        characters?: string | null
-        location?: string | null
-        props?: string | null
-        content?: string
-        screenplay?: string | null
-    } = {}
-    if (characters !== undefined) updateData.characters = characters // JSON string
-    if (location !== undefined) updateData.location = location
-    if (props !== undefined) updateData.props = props
-    if (content !== undefined) updateData.content = content
-    if (screenplay !== undefined) updateData.screenplay = screenplay // JSON string
-
-    const clip = await clipModel.update({
-        where: { id: clipId },
-        data: updateData
+    const result = await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'update_clip',
+        projectId,
+        userId: authResult.session.user.id,
+        input: {
+            clipId,
+            ...(characters !== undefined ? { characters } : {}),
+            ...(location !== undefined ? { location } : {}),
+            ...(props !== undefined ? { props } : {}),
+            ...(content !== undefined ? { content } : {}),
+            ...(screenplay !== undefined ? { screenplay } : {}),
+        },
+        source: 'project-ui',
     })
 
-    return NextResponse.json({ success: true, clip })
+    return NextResponse.json(result)
 })

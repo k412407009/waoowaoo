@@ -1,9 +1,7 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { TASK_TYPE } from '@/lib/task/types'
-import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
-import { normalizeImageGenerationCount } from '@/lib/image-generation/count'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 function parseReferenceImages(body: Record<string, unknown>): string[] {
   const list = Array.isArray(body.referenceImageUrls)
@@ -32,27 +30,15 @@ export const POST = apiHandler(async (
   if (referenceImages.length === 0) {
     throw new ApiError('INVALID_PARAMS')
   }
-  const count = normalizeImageGenerationCount('reference-to-character', body.count)
-  body.count = count
 
-  const isBackgroundJob = body.isBackgroundJob === true || body.isBackgroundJob === 1 || body.isBackgroundJob === '1'
-  const characterId = typeof body.characterId === 'string' ? body.characterId : ''
-  const appearanceId = typeof body.appearanceId === 'string' ? body.appearanceId : ''
-  if (isBackgroundJob && (!characterId || !appearanceId)) {
-    throw new ApiError('INVALID_PARAMS')
-  }
-
-  const asyncTaskResponse = await maybeSubmitLLMTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    userId: session.user.id,
+    operationId: 'reference_to_character',
     projectId,
-    type: TASK_TYPE.REFERENCE_TO_CHARACTER,
-    targetType: appearanceId ? 'CharacterAppearance' : 'Project',
-    targetId: appearanceId || characterId || projectId,
-    routePath: `/api/projects/${projectId}/reference-to-character`,
-    body,
-    dedupeKey: `reference_to_character:${appearanceId || characterId || projectId}:${count}`})
-  if (asyncTaskResponse) return asyncTaskResponse
+    userId: session.user.id,
+    input: body,
+    source: 'project-ui',
+  })
 
-  throw new ApiError('INVALID_PARAMS')
+  return NextResponse.json(result)
 })

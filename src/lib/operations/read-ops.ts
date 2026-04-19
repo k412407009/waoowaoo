@@ -1,0 +1,234 @@
+import { z } from 'zod'
+import { queryTaskTargetStates } from '@/lib/task/state-service'
+import { assembleProjectContext } from '@/lib/project-context/assembler'
+import { listProjectCommands, syncProjectCommandStatus } from '@/lib/command-center/executor'
+import { listSkillCatalogEntries, listWorkflowPackages, readSkillCatalogDocument } from '@/lib/skill-system/catalog'
+import { loadScriptPreview, loadStoryboardPreview } from '@/lib/project-agent/preview'
+import { resolveProjectPhase } from '@/lib/project-agent/project-phase'
+import { assembleProjectProjectionLite } from '@/lib/project-projection/lite'
+import { listSavedSkills } from '@/lib/saved-skills/service'
+import { buildAssistantProjectContextSnapshot } from '@/lib/project-agent/presentation'
+import type {
+  ProjectContextPartData,
+  ProjectPhasePartData,
+  ScriptPreviewPartData,
+  StoryboardPreviewPartData,
+} from '@/lib/project-agent/types'
+import type { ProjectAgentOperationRegistry } from './types'
+import { writeOperationDataPart } from './types'
+
+const taskTargetSchema = z.object({
+  targetType: z.string().min(1),
+  targetId: z.string().min(1),
+  types: z.array(z.string().min(1)).optional(),
+})
+
+function normalizeString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function createReadOperations(): ProjectAgentOperationRegistry {
+  return {
+    get_project_phase: {
+      id: 'get_project_phase',
+      description: 'Resolve the current project phase, progress and available next actions.',
+      sideEffects: { mode: 'query', risk: 'none' },
+      scope: 'project',
+      inputSchema: z.object({}),
+      outputSchema: z.unknown(),
+      execute: async (ctx) => {
+        const snapshot = await resolveProjectPhase({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          episodeId: ctx.context.episodeId || null,
+          currentStage: ctx.context.currentStage || null,
+        })
+        writeOperationDataPart<ProjectPhasePartData>(ctx.writer, 'data-project-phase', {
+          phase: snapshot.phase,
+          snapshot,
+        })
+        return snapshot
+      },
+    },
+    get_project_snapshot: {
+      id: 'get_project_snapshot',
+      description: 'Load a lightweight project snapshot projection suitable for planning and prompt context.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({}),
+      outputSchema: z.unknown(),
+      execute: async (ctx) => assembleProjectProjectionLite({
+        projectId: ctx.projectId,
+        userId: ctx.userId,
+        episodeId: ctx.context.episodeId || null,
+        currentStage: ctx.context.currentStage || null,
+      }),
+    },
+    get_project_context: {
+      id: 'get_project_context',
+      description: 'Load the current project and episode context snapshot.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({
+        detail: z.enum(['snapshot', 'full']).optional(),
+        selectedScopeRef: z.string().optional(),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const projectContext = await assembleProjectContext({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          episodeId: ctx.context.episodeId || null,
+          currentStage: ctx.context.currentStage || null,
+          selectedScopeRef: normalizeString(input.selectedScopeRef) || null,
+        })
+        const snapshot = buildAssistantProjectContextSnapshot(projectContext)
+        writeOperationDataPart<ProjectContextPartData>(ctx.writer, 'data-project-context', {
+          context: snapshot,
+        })
+        if (input.detail === 'full') return projectContext
+        return snapshot
+      },
+    },
+    list_workflow_packages: {
+      id: 'list_workflow_packages',
+      description: 'List available workflow packages and skill catalog entries.',
+      sideEffects: { mode: 'query', risk: 'none' },
+      scope: 'system',
+      inputSchema: z.object({
+        documentPath: z.string().min(1).optional(),
+        maxChars: z.number().int().positive().max(20000).optional(),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (_, input) => {
+        const payload = {
+          workflows: listWorkflowPackages().map((workflowPackage) => ({
+            id: workflowPackage.manifest.id,
+            name: workflowPackage.manifest.name,
+            summary: workflowPackage.manifest.summary,
+            requiresApproval: workflowPackage.manifest.requiresApproval,
+            skills: workflowPackage.steps.map((step) => step.skillId),
+          })),
+          catalog: listSkillCatalogEntries(),
+        }
+
+        const documentPath = normalizeString(input.documentPath)
+        if (!documentPath) return payload
+
+        const content = readSkillCatalogDocument(documentPath)
+        const limit = Math.max(200, Math.min(20000, input.maxChars ?? 6000))
+        return {
+          ...payload,
+          document: {
+            documentPath,
+            truncated: content.length > limit,
+            content: content.slice(0, limit),
+          },
+        }
+      },
+    },
+    list_saved_skills: {
+      id: 'list_saved_skills',
+      description: 'List saved skills (plan templates) for the current user within this project.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({
+        limit: z.number().int().positive().max(50).optional(),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const items = await listSavedSkills({
+          userId: ctx.userId,
+          projectId: ctx.projectId,
+          limit: input.limit ?? 20,
+        })
+        return items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          summary: item.summary,
+          kind: item.kind,
+          projectId: item.projectId,
+          createdAt: item.createdAt.toISOString(),
+          updatedAt: item.updatedAt.toISOString(),
+        }))
+      },
+    },
+    fetch_workflow_preview: {
+      id: 'fetch_workflow_preview',
+      description: 'Load a rendered preview for the latest workflow artifacts.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'episode',
+      inputSchema: z.object({
+        workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
+        episodeId: z.string().optional(),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const resolvedEpisodeId = input.episodeId || ctx.context.episodeId || ''
+        if (!resolvedEpisodeId) {
+          throw new Error('PROJECT_AGENT_EPISODE_REQUIRED')
+        }
+        if (input.workflowId === 'story-to-script') {
+          const preview = await loadScriptPreview({ episodeId: resolvedEpisodeId })
+          writeOperationDataPart<ScriptPreviewPartData>(ctx.writer, 'data-script-preview', preview)
+          return preview
+        }
+        const preview = await loadStoryboardPreview({ episodeId: resolvedEpisodeId })
+        writeOperationDataPart<StoryboardPreviewPartData>(ctx.writer, 'data-storyboard-preview', preview)
+        return preview
+      },
+    },
+    get_task_status: {
+      id: 'get_task_status',
+      description: 'Query task target states for one or more project targets.',
+      sideEffects: { mode: 'query', risk: 'none' },
+      scope: 'project',
+      inputSchema: z.object({
+        targets: z.array(taskTargetSchema).min(1).max(50),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => ({
+        states: await queryTaskTargetStates({
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          targets: input.targets,
+        }),
+      }),
+    },
+    list_recent_commands: {
+      id: 'list_recent_commands',
+      description: 'List recent command and run status for the current project or episode.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({
+        limit: z.number().int().positive().max(50).optional(),
+        syncRunning: z.boolean().optional(),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const limit = input.limit || 10
+        const syncRunning = input.syncRunning === true
+
+        const commands = await listProjectCommands({
+          projectId: ctx.projectId,
+          episodeId: ctx.context.episodeId || null,
+          limit,
+        })
+
+        if (!syncRunning) return commands
+
+        for (const command of commands) {
+          if (command.status === 'running' || command.status === 'approved') {
+            await syncProjectCommandStatus({ commandId: command.commandId })
+          }
+        }
+
+        return await listProjectCommands({
+          projectId: ctx.projectId,
+          episodeId: ctx.context.episodeId || null,
+          limit,
+        })
+      },
+    },
+  }
+}

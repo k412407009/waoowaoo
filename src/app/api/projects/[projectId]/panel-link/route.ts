@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 // POST - 更新 panel 的首尾帧链接状态
 export const POST = apiHandler(async (
@@ -21,17 +21,18 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 更新 panel 的链接状态
-  await prisma.projectPanel.update({
-    where: {
-      storyboardId_panelIndex: {
-        storyboardId,
-        panelIndex
-      }
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'mutate_storyboard',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      action: 'update_panel_fields',
+      storyboardId,
+      panelIndex: Number(panelIndex),
+      linkedToNextPanel: linked === true,
     },
-    data: {
-      linkedToNextPanel: linked
-    }
+    source: 'project-ui',
   })
 
   return NextResponse.json({ success: true })

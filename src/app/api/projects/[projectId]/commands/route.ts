@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuth } from '@/lib/api-auth'
-import { executeProjectCommand, listProjectCommands, syncProjectCommandStatus } from '@/lib/command-center/executor'
+import { executeProjectCommand } from '@/lib/command-center/executor'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const runtime = 'nodejs'
 
@@ -16,22 +17,21 @@ export const GET = apiHandler(async (
   const episodeId = request.nextUrl.searchParams.get('episodeId')?.trim() || null
   const limitRaw = request.nextUrl.searchParams.get('limit')?.trim() || ''
   const limit = limitRaw ? Number.parseInt(limitRaw, 10) : 20
-  const commands = await listProjectCommands({
-    projectId,
-    episodeId,
-    limit: Number.isFinite(limit) ? Math.max(1, Math.min(limit, 50)) : 20,
-  })
+  const resolvedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 50)) : 20
 
-  for (const command of commands) {
-    if (command.status === 'running' || command.status === 'approved') {
-      await syncProjectCommandStatus({ commandId: command.commandId })
-    }
-  }
-
-  const refreshedCommands = await listProjectCommands({
+  const refreshedCommands = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'list_recent_commands',
     projectId,
-    episodeId,
-    limit: Number.isFinite(limit) ? Math.max(1, Math.min(limit, 50)) : 20,
+    userId: authResult.session.user.id,
+    context: {
+      episodeId,
+    },
+    input: {
+      limit: resolvedLimit,
+      syncRunning: true,
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json({

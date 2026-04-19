@@ -66,6 +66,7 @@ const ROUTE_FILES = [
   'src/app/api/auth/register/route.ts',
   'src/app/api/cos/image/route.ts',
   'src/app/api/files/[...path]/route.ts',
+  'src/app/api/mutation-batches/[batchId]/revert/route.ts',
   'src/app/api/storage/sign/route.ts',
   'src/app/api/projects/[projectId]/ai-create-character/route.ts',
   'src/app/api/projects/[projectId]/ai-create-location/route.ts',

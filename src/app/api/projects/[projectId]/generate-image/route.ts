@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight } from '@/lib/api-auth'
-import { submitAssetGenerateTask } from '@/lib/assets/services/asset-actions'
-
-type LegacyProjectGenerateBody = Record<string, unknown> & {
-  type?: 'character' | 'location'
-  id?: string
-}
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -16,21 +11,24 @@ export const POST = apiHandler(async (
   const authResult = await requireProjectAuthLight(projectId)
   if (isErrorResponse(authResult)) return authResult
 
-  const body = await request.json() as LegacyProjectGenerateBody
-  if ((body.type !== 'character' && body.type !== 'location') || typeof body.id !== 'string' || body.id.trim().length === 0) {
+  const body = await request.json() as Record<string, unknown>
+  const type = body.type
+  const id = typeof body.id === 'string' ? body.id.trim() : ''
+
+  if ((type !== 'character' && type !== 'location') || !id) {
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const result = await submitAssetGenerateTask({
+  const operationId = type === 'character' ? 'generate_character_image' : 'generate_location_image'
+  const input = type === 'character' ? { characterId: id } : { locationId: id }
+
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    kind: body.type,
-    assetId: body.id,
-    body,
-    access: {
-      scope: 'project',
-      userId: authResult.session.user.id,
-      projectId,
-    },
+    operationId,
+    projectId,
+    userId: authResult.session.user.id,
+    input,
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)

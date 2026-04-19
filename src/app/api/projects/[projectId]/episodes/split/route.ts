@@ -1,8 +1,7 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { TASK_TYPE } from '@/lib/task/types'
-import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * AI 分集 API（任务化）
@@ -26,17 +25,14 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const asyncTaskResponse = await maybeSubmitLLMTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    userId: session.user.id,
+    operationId: 'episode_split_llm',
     projectId,
-    type: TASK_TYPE.EPISODE_SPLIT_LLM,
-    targetType: 'Project',
-    targetId: projectId,
-    routePath: `/api/projects/${projectId}/episodes/split`,
-    body: { content },
-    dedupeKey: `episode_split_llm:${projectId}:${content.length}`})
-  if (asyncTaskResponse) return asyncTaskResponse
+    userId: authResult.session.user.id,
+    input: { content },
+    source: 'project-ui',
+  })
 
-  throw new ApiError('INVALID_PARAMS')
+  return NextResponse.json(result)
 })

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { resolveTaskLocale } from '@/lib/task/resolve-locale'
 import { isArtStyleValue, type ArtStyleValue } from '@/lib/constants'
 import { normalizeImageGenerationCount } from '@/lib/image-generation/count'
-import { submitAssetGenerateTask } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 function toObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
@@ -48,41 +47,21 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  let targetAppearanceId = appearanceId
-  if (!targetAppearanceId) {
-    const character = await prisma.projectCharacter.findUnique({
-      where: { id: characterId },
-      include: { appearances: { orderBy: { appearanceIndex: 'asc' } } },
-    })
-    if (!character) {
-      throw new ApiError('NOT_FOUND')
-    }
-    const firstAppearance = character.appearances[0]
-    if (!firstAppearance) {
-      throw new ApiError('NOT_FOUND')
-    }
-    targetAppearanceId = firstAppearance.id
-  }
-
-  const result = await submitAssetGenerateTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    kind: 'character',
-    assetId: characterId,
-    body: {
-      appearanceId: targetAppearanceId,
-      count,
-      artStyle,
-      locale: taskLocale || undefined,
-      meta: {
-        ...bodyMeta,
-        locale: taskLocale || bodyMeta.locale || undefined,
-      },
+    operationId: 'generate_character_image',
+    projectId,
+    userId: authResult.session.user.id,
+    context: {
+      locale: taskLocale || normalizeString(bodyMeta.locale) || null,
     },
-    access: {
-      scope: 'project',
-      userId: authResult.session.user.id,
-      projectId,
+    input: {
+      characterId,
+      ...(appearanceId ? { appearanceId } : {}),
+      ...(count ? { count } : {}),
+      ...(artStyle ? { artStyle } : {}),
     },
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)

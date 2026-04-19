@@ -1,10 +1,7 @@
-import { createHash } from 'crypto'
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuth, isErrorResponse } from '@/lib/api-auth'
-import { getProjectModelConfig } from '@/lib/config-service'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { TASK_TYPE } from '@/lib/task/types'
-import { maybeSubmitLLMTask } from '@/lib/llm-observe/route-task'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -21,32 +18,14 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const modelConfig = await getProjectModelConfig(projectId, session.user.id)
-  if (!modelConfig.analysisModel) {
-    throw new ApiError('MISSING_CONFIG')
-  }
-
-  const dedupeDigest = createHash('sha1')
-    .update(`${projectId}:${session.user.id}:location:${userInstruction}`)
-    .digest('hex')
-    .slice(0, 16)
-
-  const payload = {
-    userInstruction,
-    analysisModel: modelConfig.analysisModel,
-    displayMode: 'detail' as const}
-
-  const asyncTaskResponse = await maybeSubmitLLMTask({
+  const result = await executeProjectAgentOperationFromApi({
     request,
-    userId: session.user.id,
+    operationId: 'ai_create_location',
     projectId,
-    type: TASK_TYPE.AI_CREATE_LOCATION,
-    targetType: 'ProjectLocationDesign',
-    targetId: projectId,
-    routePath: `/api/projects/${projectId}/ai-create-location`,
-    body: payload,
-    dedupeKey: `project_ai_create_location:${dedupeDigest}`})
-  if (asyncTaskResponse) return asyncTaskResponse
+    userId: session.user.id,
+    input: { userInstruction },
+    source: 'project-ui',
+  })
 
-  throw new ApiError('INVALID_PARAMS')
+  return NextResponse.json(result)
 })

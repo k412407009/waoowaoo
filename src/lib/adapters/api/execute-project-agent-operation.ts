@@ -1,0 +1,85 @@
+import type { NextRequest } from 'next/server'
+import { ApiError } from '@/lib/api-errors'
+import { createProjectAgentOperationRegistry } from '@/lib/operations/registry'
+
+function toMessage(error: unknown): string {
+  if (error instanceof Error) return error.message || ''
+  if (typeof error === 'string') return error
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return ''
+  }
+}
+
+function inferApiErrorCodeFromMessage(message: string): 'NOT_FOUND' | 'INVALID_PARAMS' | 'FORBIDDEN' | 'UNAUTHORIZED' | 'CONFLICT' | null {
+  const lower = message.toLowerCase()
+  if (lower.includes('unauthorized') || lower.includes('need login') || lower.includes('not authenticated')) return 'UNAUTHORIZED'
+  if (lower.includes('forbidden') || lower.includes('permission denied')) return 'FORBIDDEN'
+  if (lower.includes('not found') || lower.includes('不存在') || lower.includes('missing record') || lower.includes('not_found')) return 'NOT_FOUND'
+  if (lower.includes('conflict') || lower.includes('already exists') || lower.includes('duplicate')) return 'CONFLICT'
+  if (lower.includes('invalid') || lower.includes('missing') || lower.includes('required') || lower.includes('bad request')) return 'INVALID_PARAMS'
+  return null
+}
+
+export async function executeProjectAgentOperationFromApi(params: {
+  request: NextRequest
+  operationId: string
+  projectId: string
+  userId: string
+  context?: {
+    locale?: string | null
+    episodeId?: string | null
+    currentStage?: string | null
+  }
+  input: unknown
+  source?: string
+}) {
+  const registry = createProjectAgentOperationRegistry()
+  const operation = registry[params.operationId]
+  if (!operation) {
+    throw new ApiError('NOT_FOUND', {
+      message: `operation not found: ${params.operationId}`,
+    })
+  }
+
+  const parsed = operation.inputSchema.safeParse(params.input)
+  if (!parsed.success) {
+    throw new ApiError('INVALID_PARAMS', {
+      message: 'INVALID_PARAMS',
+      issues: parsed.error.issues,
+    })
+  }
+
+  try {
+    const result = await operation.execute({
+      request: params.request,
+      userId: params.userId,
+      projectId: params.projectId,
+      context: {
+        ...(params.context?.locale ? { locale: params.context.locale } : {}),
+        ...(params.context?.episodeId ? { episodeId: params.context.episodeId } : {}),
+        ...(params.context?.currentStage ? { currentStage: params.context.currentStage } : {}),
+      },
+      source: params.source || 'project-ui',
+      writer: null,
+    }, parsed.data)
+    const outputParsed = operation.outputSchema.safeParse(result)
+    if (!outputParsed.success) {
+      throw new ApiError('EXTERNAL_ERROR', {
+        code: 'OPERATION_OUTPUT_INVALID',
+        message: `operation output schema mismatch: ${params.operationId}`,
+        issues: outputParsed.error.issues,
+      })
+    }
+    return outputParsed.data
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    const message = toMessage(error)
+    const inferred = inferApiErrorCodeFromMessage(message)
+    if (inferred) {
+      throw new ApiError(inferred, { message })
+    }
+    throw error
+  }
+}

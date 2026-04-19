@@ -1,52 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
-import { apiHandler, ApiError, getRequestId } from '@/lib/api-errors'
-import { submitTask } from '@/lib/task/submitter'
-import { resolveRequiredTaskLocale } from '@/lib/task/resolve-locale'
-import { TASK_TYPE } from '@/lib/task/types'
-import { buildDefaultTaskBillingInfo } from '@/lib/billing'
-import { getProjectModelConfig } from '@/lib/config-service'
-import { resolveInsertPanelUserInput } from '@/lib/project-workflow/insert-panel'
+import { apiHandler, ApiError } from '@/lib/api-errors'
+import { resolveTaskLocale } from '@/lib/task/resolve-locale'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
   context: { params: Promise<{ projectId: string }> },
 ) => {
   const { projectId } = await context.params
-
   const authResult = await requireProjectAuthLight(projectId)
   if (isErrorResponse(authResult)) return authResult
-  const { session } = authResult
 
   const body = await request.json()
-  const locale = resolveRequiredTaskLocale(request, body)
   const storyboardId = body?.storyboardId
   const insertAfterPanelId = body?.insertAfterPanelId
-  const userInput = resolveInsertPanelUserInput((body || {}) as Record<string, unknown>, locale)
 
   if (!storyboardId || !insertAfterPanelId) {
-    throw new ApiError('INVALID_PARAMS', {
-    })
+    throw new ApiError('INVALID_PARAMS')
   }
 
-  const projectModelConfig = await getProjectModelConfig(projectId, session.user.id)
-  const billingPayload = {
-    ...body,
-    userInput,
-    ...(projectModelConfig.analysisModel ? { analysisModel: projectModelConfig.analysisModel } : {}),
-  }
+  const locale = resolveTaskLocale(request, body)
 
-  const result = await submitTask({
-    userId: session.user.id,
-    locale,
-    requestId: getRequestId(request),
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'mutate_storyboard',
     projectId,
-    type: TASK_TYPE.INSERT_PANEL,
-    targetType: 'ProjectStoryboard',
-    targetId: storyboardId,
-    payload: billingPayload,
-    dedupeKey: `insert_panel:${storyboardId}:${insertAfterPanelId}`,
-    billingInfo: buildDefaultTaskBillingInfo(TASK_TYPE.INSERT_PANEL, billingPayload),
+    userId: authResult.session.user.id,
+    context: {
+      locale,
+    },
+    input: {
+      action: 'insert_panel',
+      storyboardId,
+      insertAfterPanelId,
+      ...body,
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)

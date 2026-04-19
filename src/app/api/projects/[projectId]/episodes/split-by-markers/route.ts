@@ -7,9 +7,9 @@ import { logInfo as _ulogInfo } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { logUserAction } from '@/lib/logging/semantic'
-import { detectEpisodeMarkers, splitByMarkers } from '@/lib/episode-marker-detector'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
     request: NextRequest,
@@ -48,36 +48,38 @@ export const POST = apiHandler(async (
 
     const projectName = project.name || projectId
 
-    // 执行分集标记检测
-    const markerResult = detectEpisodeMarkers(content)
-
-    if (!markerResult.hasMarkers || markerResult.matches.length < 2) {
-        throw new ApiError('INVALID_PARAMS')
+    const result = await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'split_episodes_by_markers',
+        projectId,
+        userId,
+        input: { content },
+        source: 'project-ui',
+    }) as {
+        success: boolean
+        method: string
+        markerType: string
+        confidence: number
+        episodes: Array<{ title: string; content: string; wordCount: number }>
     }
-
-    // 根据标记分割内容
-    const episodes = splitByMarkers(content, markerResult)
 
     // 记录日志
     logUserAction(
         'EPISODE_SPLIT_BY_MARKERS',
         userId,
         username,
-        `标识符分集完成 - ${episodes.length} 集，标记类型: ${markerResult.markerType}`,
+        `标识符分集完成 - ${result.episodes.length} 集，标记类型: ${result.markerType}`,
         {
-            markerType: markerResult.markerType,
-            confidence: markerResult.confidence,
-            episodeCount: episodes.length,
-            totalWords: episodes.reduce((sum, ep) => sum + ep.wordCount, 0)
+            markerType: result.markerType,
+            confidence: result.confidence,
+            episodeCount: result.episodes.length,
+            totalWords: result.episodes.reduce((sum, ep) => sum + ep.wordCount, 0)
         },
         projectId,
         projectName
     )
 
     return NextResponse.json({
-        success: true,
-        method: 'markers',
-        markerType: markerResult.markerType,
-        episodes
+        ...result
     })
 })

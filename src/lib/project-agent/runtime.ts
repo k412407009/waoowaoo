@@ -14,10 +14,10 @@ import { createOpenAI } from '@ai-sdk/openai'
 import type { NextRequest } from 'next/server'
 import { getProviderConfig, getProviderKey } from '@/lib/api-config'
 import { createProjectAgentOperationRegistry } from '@/lib/operations/registry'
-import { writeOperationDataPart } from '@/lib/operations/types'
 import { getUserModelConfig } from '@/lib/config-service'
 import { resolveLlmRuntimeModel } from '@/lib/llm/runtime-shared'
-import type { ConfirmationRequestPartData, ProjectAgentContext } from './types'
+import { executeProjectAgentOperationFromTool } from '@/lib/adapters/tools/execute-project-agent-operation'
+import type { ProjectAgentContext } from './types'
 import { resolveProjectPhase } from './project-phase'
 
 function normalizeProjectAgentContext(raw: unknown): ProjectAgentContext {
@@ -89,8 +89,9 @@ function buildProjectAgentSystemPrompt(params: {
     '对于 story-to-script 和 script-to-storyboard，只能通过固定 workflow package 执行。',
     'workflow package 内部 skills 顺序不可更改、不可跳过、不可合并。',
     '当用户要求执行这两条主流程时：先调用 create_workflow_plan，再等待审批；只有用户明确同意后才调用 approve_plan。',
-    '当 tool 需要 confirmed=true（会产生写入或计费 side effect）时，必须先向用户说明风险并等待用户明确回复“确认/同意”后再调用。',
-    '你可以调用 get_project_phase、get_project_snapshot、get_project_context、list_workflow_packages、list_saved_skills、save_workflow_plan_as_skill、create_workflow_plan_from_saved_skill、create_workflow_plan、approve_plan、reject_plan、list_recent_commands、fetch_workflow_preview、get_task_status、generate_character_image、generate_location_image、modify_asset_image、regenerate_panel_image、panel_variant、mutate_storyboard、voice_design、voice_generate、lip_sync、generate_video、list_recent_mutation_batches、revert_mutation_batch。',
+    '在 assistant 对话入口：低风险小操作可直接 act；中/高风险、计费、或 destructive/overwrite/bulk/longRunning 操作必须先征得用户明确确认后再执行（tool 参数中带 confirmed=true）。',
+    '当你看到 staleArtifacts 或 failedItems：优先解释原因与推荐动作（例如重跑 workflow、或执行更小粒度的 act 修复）。',
+    '你可以使用所有已注册的 tools 来完成任务。tool 定义中已包含使用说明，无需额外列举。',
     '回答简洁，用中文。',
     `projectId=${params.projectId}`,
     `episodeId=${episodeId}`,
@@ -144,33 +145,16 @@ export async function createProjectAgentChatResponse(input: {
             description: operation.description,
             inputSchema: operation.inputSchema,
             execute: async (args) => {
-              const requiresConfirmation = operation.sideEffects?.requiresConfirmation ?? (operation.sideEffects?.billable === true)
-              if (requiresConfirmation) {
-                const confirmed = !!(args && typeof args === 'object' && (args as { confirmed?: unknown }).confirmed === true)
-                if (!confirmed) {
-                  writeOperationDataPart<ConfirmationRequestPartData>(writer, 'data-confirmation-request', {
-                    operationId,
-                    summary: operation.sideEffects?.confirmationSummary
-                      || `执行 ${operationId} 会产生写入或计费副作用。请在确认后重试，并在参数中带 confirmed=true。`,
-                    argsHint: {
-                      ...(args && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}),
-                      confirmed: true,
-                    },
-                  })
-                  return {
-                    confirmationRequired: true,
-                    operationId,
-                  }
-                }
-              }
-
-              return operation.execute({
+              return executeProjectAgentOperationFromTool({
                 request: input.request,
-                userId: input.userId,
+                operationId,
                 projectId: input.projectId,
+                userId: input.userId,
                 context,
+                source: 'assistant-panel',
                 writer,
-              }, args)
+                input: args,
+              })
             },
           }),
         ]),
@@ -184,6 +168,8 @@ export async function createProjectAgentChatResponse(input: {
           phaseSummary: [
             `phase=${phase.phase}`,
             `activeRuns=${String(phase.activeRunCount)}`,
+            `failedItems=${phase.failedItems.join(';') || '-'}`,
+            `staleArtifacts=${phase.staleArtifacts?.join(',') || '-'}`,
             `progress=clips:${String(phase.progress.clipCount)},screenplays:${String(phase.progress.screenplayClipCount)},storyboards:${String(phase.progress.storyboardCount)},panels:${String(phase.progress.panelCount)},voices:${String(phase.progress.voiceLineCount)}`,
             `actions.plan=${phase.availableActions.planMode.join(',') || '-'}`,
             `actions.act=${phase.availableActions.actMode.join(',') || '-'}`,
@@ -191,7 +177,7 @@ export async function createProjectAgentChatResponse(input: {
         }),
         messages: await toModelMessages(normalizedMessages),
         tools,
-        stopWhen: stepCountIs(6),
+        stopWhen: stepCountIs(120),
         temperature: 0.2,
       })
 

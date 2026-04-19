@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -20,10 +20,17 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 更新shot
-  const updatedShot = await prisma.projectShot.update({
-    where: { id: shotId },
-    data: { [field]: value }
+  const updatedShot = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'update_shot_prompt',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      shotId,
+      field,
+      value,
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json({ success: true, shot: updatedShot })

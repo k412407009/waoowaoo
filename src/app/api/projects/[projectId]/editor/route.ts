@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * GET /api/projects/[projectId]/editor
@@ -63,36 +64,19 @@ export const PUT = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    // 验证剧集存在
-    const episode = await prisma.projectEpisode.findFirst({
-        where: {
-            id: episodeId,
-            projectId
-        }
-    })
-
-    if (!episode) {
-        throw new ApiError('NOT_FOUND')
-    }
-
-    // 保存或更新编辑器项目
-    const editorProject = await prisma.videoEditorProject.upsert({
-        where: { episodeId },
-        create: {
+    const result = await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'save_video_editor_project',
+        projectId,
+        userId: authResult.session.user.id,
+        input: {
             episodeId,
-            projectData: JSON.stringify(projectData)
+            projectData,
         },
-        update: {
-            projectData: JSON.stringify(projectData),
-            updatedAt: new Date()
-        }
+        source: 'project-ui',
     })
 
-    return NextResponse.json({
-        success: true,
-        id: editorProject.id,
-        updatedAt: editorProject.updatedAt
-    })
+    return NextResponse.json(result)
 })
 
 /**
@@ -115,8 +99,15 @@ export const DELETE = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    await prisma.videoEditorProject.delete({
-        where: { episodeId }
+    await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'delete_video_editor_project',
+        projectId,
+        userId: authResult.session.user.id,
+        input: {
+            episodeId,
+        },
+        source: 'project-ui',
     })
 
     return NextResponse.json({ success: true })

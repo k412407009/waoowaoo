@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { removeLocationPromptSuffix } from '@/lib/constants'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -21,21 +20,17 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 更新场景描述（移除可能存在的系统后缀，后缀只在生成图片时添加）
-  const cleanDescription = removeLocationPromptSuffix(newDescription.trim())
-
-  // 更新 LocationImage 表中对应的记录
-  const locationImage = await prisma.locationImage.findFirst({
-    where: { locationId, imageIndex }
-  })
-
-  if (!locationImage) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  await prisma.locationImage.update({
-    where: { id: locationImage.id },
-    data: { description: cleanDescription }
+  await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'update_location_image_description',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      locationId,
+      imageIndex,
+      newDescription,
+    },
+    source: 'project-ui',
   })
 
   return NextResponse.json({ success: true })

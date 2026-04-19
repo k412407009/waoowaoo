@@ -1,33 +1,8 @@
-import { logInfo as _ulogInfo } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getSignedUrl, generateUniqueKey, downloadAndUploadImage, toFetchableUrl } from '@/lib/storage'
-import { resolveStorageKeyFromMediaValue } from '@/lib/media/service'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-
-interface PanelHistoryEntry {
-  url: string
-  timestamp: string
-}
-
-function parseUnknownArray(jsonValue: string | null): unknown[] {
-  if (!jsonValue) return []
-  try {
-    const parsed = JSON.parse(jsonValue)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function parsePanelHistory(jsonValue: string | null): PanelHistoryEntry[] {
-  return parseUnknownArray(jsonValue).filter((entry): entry is PanelHistoryEntry => {
-    if (!entry || typeof entry !== 'object') return false
-    const candidate = entry as { url?: unknown; timestamp?: unknown }
-    return typeof candidate.url === 'string' && typeof candidate.timestamp === 'string'
-  })
-}
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST /api/projects/[projectId]/panel/select-candidate
@@ -46,8 +21,10 @@ export const POST = apiHandler(async (
   const authResult = await requireProjectAuthLight(projectId)
   if (isErrorResponse(authResult)) return authResult
 
-  const body = await request.json()
-  const { panelId, selectedImageUrl, action = 'select' } = body
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>
+  const panelId = typeof body.panelId === 'string' ? body.panelId.trim() : ''
+  const selectedImageUrl = typeof body.selectedImageUrl === 'string' ? body.selectedImageUrl.trim() : ''
+  const action = body.action === 'cancel' ? 'cancel' : 'select'
 
   if (!panelId) {
     throw new ApiError('INVALID_PARAMS')
@@ -55,9 +32,22 @@ export const POST = apiHandler(async (
 
   // === 取消操作 ===
   if (action === 'cancel') {
-    await prisma.projectPanel.update({
+    const panel = await prisma.projectPanel.findUnique({
       where: { id: panelId },
-      data: { candidateImages: null }
+      select: { storyboardId: true },
+    })
+    if (!panel) throw new ApiError('NOT_FOUND')
+    await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'mutate_storyboard',
+      projectId,
+      userId: authResult.session.user.id,
+      input: {
+        action: 'cancel_panel_candidates',
+        storyboardId: panel.storyboardId,
+        panelId,
+      },
+      source: 'project-ui',
     })
 
     return NextResponse.json({
@@ -71,65 +61,33 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取 Panel
   const panel = await prisma.projectPanel.findUnique({
-    where: { id: panelId }
-  })
-
-  if (!panel) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  // 验证选择的图片是否在候选列表中
-  const candidateImages = parseUnknownArray(panel.candidateImages)
-
-  const selectedCosKey = await resolveStorageKeyFromMediaValue(selectedImageUrl)
-  const candidateKeys = (await Promise.all(candidateImages.map((candidate: unknown) => resolveStorageKeyFromMediaValue(candidate))))
-    .filter((k): k is string => !!k)
-  const isValidCandidate = !!selectedCosKey && candidateKeys.includes(selectedCosKey)
-
-  if (!isValidCandidate) {
-    _ulogInfo(
-      `[select-candidate] 选择失败: selectedCosKey=${selectedCosKey}, candidateKeys=${JSON.stringify(candidateKeys)}, candidateImages=${JSON.stringify(candidateImages)}`,
-    )
-    throw new ApiError('INVALID_PARAMS')
-  }
-
-  // 保存当前图片到历史记录
-  const currentHistory = parsePanelHistory(panel.imageHistory)
-  if (panel.imageUrl) {
-    currentHistory.push({
-      url: panel.imageUrl,
-      timestamp: new Date().toISOString()
-    })
-  }
-
-  // 选择候选图时优先复用已存在的 COS key，避免重复下载上传（也避免 /m/* 相对URL被 Node fetch 解析失败）
-  let finalImageKey = selectedCosKey as string
-  const isReusableKey = !finalImageKey.startsWith('http://') && !finalImageKey.startsWith('https://') && !finalImageKey.startsWith('/')
-
-  if (!isReusableKey) {
-    const sourceUrl = toFetchableUrl(selectedImageUrl)
-    const cosKey = generateUniqueKey(`panel-${panelId}-selected`, 'png')
-    finalImageKey = await downloadAndUploadImage(sourceUrl, cosKey)
-  }
-
-  const signedUrl = getSignedUrl(finalImageKey, 7 * 24 * 3600)
-
-  // 更新 Panel：设置新图片，清空候选列表
-  await prisma.projectPanel.update({
     where: { id: panelId },
-    data: {
-      imageUrl: finalImageKey,
-      imageHistory: JSON.stringify(currentHistory),
-      candidateImages: null
-    }
+    select: { storyboardId: true },
   })
+  if (!panel) throw new ApiError('NOT_FOUND')
+
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'mutate_storyboard',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      action: 'select_panel_candidate',
+      storyboardId: panel.storyboardId,
+      panelId,
+      selectedImageUrl,
+    },
+    source: 'project-ui',
+  })
+
+  const imageUrl = (result && typeof result === 'object' && !Array.isArray(result) && 'imageUrl' in result)
+    ? (result as { imageUrl?: unknown }).imageUrl
+    : null
 
   return NextResponse.json({
     success: true,
-    imageUrl: signedUrl,
-    cosKey: finalImageKey,
+    imageUrl,
     message: '已选择图片'
   })
 })

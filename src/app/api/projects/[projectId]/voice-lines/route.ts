@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { resolveMediaRef, resolveMediaRefFromLegacyValue } from '@/lib/media/service'
+import { resolveMediaRef } from '@/lib/media/service'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 async function resolveMatchedPanelData(
   matchedPanelId: string | null | undefined,
@@ -179,62 +179,21 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { id: true }
-  })
-  if (!project) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const episode = await prisma.projectEpisode.findFirst({
-    where: {
-      id: episodeId,
-      projectId
-    },
-    select: { id: true }
-  })
-  if (!episode) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const maxLine = await prisma.projectVoiceLine.findFirst({
-    where: { episodeId },
-    orderBy: { lineIndex: 'desc' },
-    select: { lineIndex: true }
-  })
-  const nextLineIndex = (maxLine?.lineIndex || 0) + 1
-
-  const matchedPanelData = await resolveMatchedPanelData(
-    matchedPanelId === undefined ? undefined : matchedPanelId,
-    episodeId
-  )
-
-  const created = await prisma.projectVoiceLine.create({
-    data: {
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'create_voice_line',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
       episodeId,
-      lineIndex: nextLineIndex,
-      content: content.trim(),
-      speaker: speaker.trim(),
-      ...(matchedPanelData || {})
+      content,
+      speaker,
+      ...(matchedPanelId !== undefined ? { matchedPanelId } : {}),
     },
-    include: {
-      matchedPanel: {
-        select: {
-          id: true,
-          storyboardId: true,
-          panelIndex: true
-        }
-      }
-    }
+    source: 'project-ui',
   })
 
-  const voiceLine = await withVoiceLineMedia(created)
-
-  return NextResponse.json({
-    success: true,
-    voiceLine
-  })
+  return NextResponse.json(result)
 })
 
 /**
@@ -268,78 +227,41 @@ export const PATCH = apiHandler(async (
 
   // 单条更新
   if (lineId) {
-    const updateData: Prisma.ProjectVoiceLineUncheckedUpdateInput = {}
-    if (voicePresetId !== undefined) updateData.voicePresetId = voicePresetId
-    if (emotionPrompt !== undefined) updateData.emotionPrompt = emotionPrompt || null
-    if (emotionStrength !== undefined) updateData.emotionStrength = emotionStrength
-    if (content !== undefined) {
-      if (!content.trim()) {
-        throw new ApiError('INVALID_PARAMS')
-      }
-      updateData.content = content.trim()
-    }
-    if (speaker !== undefined) {
-      if (!speaker.trim()) {
-        throw new ApiError('INVALID_PARAMS')
-      }
-      updateData.speaker = speaker.trim()
-    }
-    if (audioUrl !== undefined) {
-      updateData.audioUrl = audioUrl // 支持清空音频 (传 null)
-      const media = await resolveMediaRefFromLegacyValue(audioUrl)
-      updateData.audioMediaId = media?.id || null
-    }
-    if (matchedPanelId !== undefined) {
-      const currentLine = await prisma.projectVoiceLine.findUnique({
-        where: { id: lineId },
-        select: { episodeId: true }
-      })
-      if (!currentLine) {
-        throw new ApiError('NOT_FOUND')
-      }
-
-      const matchedPanelData = await resolveMatchedPanelData(matchedPanelId, currentLine.episodeId)
-      if (matchedPanelData) {
-        updateData.matchedPanelId = matchedPanelData.matchedPanelId
-        updateData.matchedStoryboardId = matchedPanelData.matchedStoryboardId
-        updateData.matchedPanelIndex = matchedPanelData.matchedPanelIndex
-      }
-    }
-
-    const updated = await prisma.projectVoiceLine.update({
-      where: { id: lineId },
-      data: updateData,
-      include: {
-        matchedPanel: {
-          select: {
-            id: true,
-            storyboardId: true,
-            panelIndex: true
-          }
-        }
-      }
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'update_voice_line',
+      projectId,
+      userId: authResult.session.user.id,
+      input: {
+        lineId,
+        ...(voicePresetId !== undefined ? { voicePresetId } : {}),
+        ...(emotionPrompt !== undefined ? { emotionPrompt } : {}),
+        ...(emotionStrength !== undefined ? { emotionStrength } : {}),
+        ...(content !== undefined ? { content } : {}),
+        ...(speaker !== undefined ? { speaker } : {}),
+        ...(audioUrl !== undefined ? { audioUrl } : {}),
+        ...(matchedPanelId !== undefined ? { matchedPanelId } : {}),
+      },
+      source: 'project-ui',
     })
-    return NextResponse.json({
-      success: true,
-      voiceLine: await withVoiceLineMedia(updated)
-    })
+    return NextResponse.json(result)
   }
 
   // 批量更新同一发言人（仅支持更新音色）
   if (speaker && episodeId) {
-    const result = await prisma.projectVoiceLine.updateMany({
-      where: {
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'bulk_update_speaker_voice_preset',
+      projectId,
+      userId: authResult.session.user.id,
+      input: {
         episodeId,
-        speaker
+        speaker,
+        voicePresetId,
       },
-      data: { voicePresetId }
+      source: 'project-ui',
     })
-    return NextResponse.json({
-      success: true,
-      updatedCount: result.count,
-      speaker,
-      voicePresetId
-    })
+    return NextResponse.json(result)
   }
 
   throw new ApiError('INVALID_PARAMS')
@@ -366,39 +288,16 @@ export const DELETE = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取要删除的台词
-  const lineToDelete = await prisma.projectVoiceLine.findUnique({
-    where: { id: lineId }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'delete_voice_line',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      lineId,
+    },
+    source: 'project-ui',
   })
 
-  if (!lineToDelete) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  // 删除台词
-  await prisma.projectVoiceLine.delete({
-    where: { id: lineId }
-  })
-
-  // 重新排序剩余台词的 lineIndex
-  const remainingLines = await prisma.projectVoiceLine.findMany({
-    where: { episodeId: lineToDelete.episodeId },
-    orderBy: { lineIndex: 'asc' }
-  })
-
-  // 更新每条台词的 lineIndex
-  for (let i = 0; i < remainingLines.length; i++) {
-    if (remainingLines[i].lineIndex !== i + 1) {
-      await prisma.projectVoiceLine.update({
-        where: { id: remainingLines[i].id },
-        data: { lineIndex: i + 1 }
-      })
-    }
-  }
-
-  return NextResponse.json({
-    success: true,
-    deletedId: lineId,
-    remainingCount: remainingLines.length
-  })
+  return NextResponse.json(result)
 })

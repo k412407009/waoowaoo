@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { attachMediaFieldsToProject } from '@/lib/media/attach'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * GET /api/projects/[projectId]/storyboards
@@ -61,9 +62,16 @@ export const PATCH = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    await prisma.projectStoryboard.update({
-        where: { id: storyboardId },
-        data: { lastError: null }})
+    await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'clear_storyboard_error',
+        projectId,
+        userId: authResult.session.user.id,
+        input: {
+            storyboardId,
+        },
+        source: 'project-ui',
+    })
 
     return NextResponse.json({ success: true })
 })

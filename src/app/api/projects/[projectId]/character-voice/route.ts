@@ -1,9 +1,7 @@
-import { logInfo as _ulogInfo } from '@/lib/logging/core'
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { uploadObject, generateUniqueKey, getSignedUrl } from '@/lib/storage'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * PATCH /api/projects/[projectId]/character-voice
@@ -27,17 +25,21 @@ export const PATCH = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 更新角色音色设置
-  const character = await prisma.projectCharacter.update({
-    where: { id: characterId },
-    data: {
-      voiceType: voiceType || null,
-      voiceId: voiceId || null,
-      customVoiceUrl: customVoiceUrl || null
-    }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'patch_character_voice',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      characterId,
+      ...(voiceType !== undefined ? { voiceType } : {}),
+      ...(voiceId !== undefined ? { voiceId } : {}),
+      ...(customVoiceUrl !== undefined ? { customVoiceUrl } : {}),
+    },
+    source: 'project-ui',
   })
 
-  return NextResponse.json({ success: true, character })
+  return NextResponse.json(result)
 })
 
 /**
@@ -72,36 +74,22 @@ export const POST = apiHandler(async (
       throw new ApiError('INVALID_PARAMS')
     }
 
-    // 解码 base64 音频
-    const audioBuffer = Buffer.from(audioBase64, 'base64')
-
-    // 上传到COS
-    const key = generateUniqueKey(`voice/custom/${projectId}/${characterId}`, 'wav')
-    const cosUrl = await uploadObject(audioBuffer, key)
-
-    // 更新角色音色设置
-    const character = await prisma.projectCharacter.update({
-      where: { id: characterId },
-      data: {
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'upload_character_voice_audio',
+      projectId,
+      userId: authResult.session.user.id,
+      input: {
+        characterId,
+        voiceId,
         voiceType: 'qwen-designed',
-        voiceId: voiceId,  // 保存 AI 生成的 voice ID
-        customVoiceUrl: cosUrl
-      }
+        audioBase64,
+        ext: 'wav',
+      },
+      source: 'project-ui',
     })
 
-    _ulogInfo(`Character ${characterId} AI-designed voice saved: ${cosUrl}, voiceId: ${voiceId}`)
-
-    // 返回签名URL
-    const signedAudioUrl = getSignedUrl(cosUrl, 7200)
-
-    return NextResponse.json({
-      success: true,
-      audioUrl: signedAudioUrl,
-      character: {
-        ...character,
-        customVoiceUrl: signedAudioUrl
-      }
-    })
+    return NextResponse.json(result)
   }
 
   // 处理 FormData 请求（文件上传）
@@ -126,31 +114,19 @@ export const POST = apiHandler(async (
   // 获取文件扩展名
   const ext = file.name.split('.').pop()?.toLowerCase() || 'mp3'
 
-  // 上传到COS
-  const key = generateUniqueKey(`voice/custom/${projectId}/${characterId}`, ext)
-  const audioUrl = await uploadObject(buffer, key)
-
-  // 更新角色音色设置为自定义
-  const character = await prisma.projectCharacter.update({
-    where: { id: characterId },
-    data: {
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'upload_character_voice_audio',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      characterId,
       voiceType: 'uploaded',
-      voiceId: null,
-      customVoiceUrl: audioUrl
-    }
+      audioBase64: buffer.toString('base64'),
+      ext,
+    },
+    source: 'project-ui',
   })
 
-  _ulogInfo(`Character ${characterId} voice uploaded: ${audioUrl}`)
-
-  // 返回签名URL，以便前端可以立即播放
-  const signedAudioUrl = getSignedUrl(audioUrl, 7200)
-
-  return NextResponse.json({
-    success: true,
-    audioUrl: signedAudioUrl,
-    character: {
-      ...character,
-      customVoiceUrl: signedAudioUrl // 返回签名URL给前端
-    }
-  })
+  return NextResponse.json(result)
 })

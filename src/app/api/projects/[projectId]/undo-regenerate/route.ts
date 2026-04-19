@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight } from '@/lib/api-auth'
-import { revertAssetRender } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 type LegacyProjectRevertBody = Record<string, unknown> & {
   type?: 'character' | 'location'
@@ -21,15 +21,13 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const result = await revertAssetRender({
-    kind: body.type,
-    assetId: body.id,
-    body,
-    access: {
-      scope: 'project',
-      userId: authResult.session.user.id,
-      projectId,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'revert_asset_render',
+    projectId,
+    userId: authResult.session.user.id,
+    input: body,
+    source: 'project-ui',
   })
 
   return NextResponse.json(result)
