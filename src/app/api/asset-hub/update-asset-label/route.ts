@@ -1,6 +1,7 @@
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireUserAuth, isErrorResponse } from '@/lib/api-auth'
-import { apiHandler, ApiError } from '@/lib/api-errors'
+import { apiHandler } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * POST /api/asset-hub/update-asset-label
@@ -9,23 +10,14 @@ import { apiHandler, ApiError } from '@/lib/api-errors'
 export const POST = apiHandler(async (request: NextRequest) => {
     const authResult = await requireUserAuth()
     if (isErrorResponse(authResult)) return authResult
-    void authResult
-
-    const body = await request.json()
-    const { type, id, newName, appearanceIndex } = body
-
-    if (!type || !id || !newName) {
-        throw new ApiError('INVALID_PARAMS')
-    }
-
-    void appearanceIndex
-
-    if (type !== 'character' && type !== 'location') {
-        throw new ApiError('INVALID_PARAMS')
-    }
-
-    throw new ApiError('INVALID_PARAMS', {
-        code: 'GLOBAL_ASSET_LABEL_UPDATES_DISABLED',
-        message: 'Global asset images no longer support label updates',
+    const result = await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'api_asset_hub_update_asset_label_disabled',
+        projectId: 'global-asset-hub',
+        userId: authResult.session.user.id,
+        input: {},
+        source: 'asset-hub',
     })
+
+    return NextResponse.json(result)
 })

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireUserAuth } from '@/lib/api-auth'
-import { selectAssetRender } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 type LegacySelectBody = Record<string, unknown> & {
   type?: 'character' | 'location'
@@ -17,14 +17,13 @@ export const POST = apiHandler(async (request: NextRequest) => {
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const result = await selectAssetRender({
-    kind: body.type,
-    assetId: body.id,
-    body,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_asset_hub_select_image',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: body,
+    source: 'asset-hub',
   })
 
   return NextResponse.json(result)
