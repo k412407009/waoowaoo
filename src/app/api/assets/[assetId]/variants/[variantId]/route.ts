@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight, requireUserAuth } from '@/lib/api-auth'
-import { updateAssetVariant } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind, AssetScope } from '@/lib/assets/contracts'
 
 type UpdateVariantBody = {
@@ -16,7 +16,7 @@ export const PATCH = apiHandler(async (
 ) => {
   const { assetId, variantId } = await context.params
   const body = await request.json() as UpdateVariantBody
-  if ((body.scope !== 'global' && body.scope !== 'project') || (body.kind !== 'character' && body.kind !== 'location' && body.kind !== 'prop')) {
+  if ((body.scope !== 'global' && body.scope !== 'project')) {
     throw new ApiError('INVALID_PARAMS')
   }
 
@@ -24,31 +24,26 @@ export const PATCH = apiHandler(async (
     if (!body.projectId) throw new ApiError('INVALID_PARAMS')
     const authResult = await requireProjectAuthLight(body.projectId)
     if (isErrorResponse(authResult)) return authResult
-    const result = await updateAssetVariant({
-      kind: body.kind,
-      assetId,
-      variantId,
-      body,
-      access: {
-        scope: 'project',
-        userId: authResult.session.user.id,
-        projectId: body.projectId,
-      },
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_update_variant',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: { assetId, variantId, ...body },
+      source: 'project-ui',
     })
     return NextResponse.json(result)
   }
 
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
-  const result = await updateAssetVariant({
-    kind: body.kind,
-    assetId,
-    variantId,
-    body,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_update_variant',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: { assetId, variantId, ...body },
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })

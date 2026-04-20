@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuth, requireUserAuth } from '@/lib/api-auth'
-import { updateAssetRenderLabel } from '@/lib/assets/services/asset-label'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind, AssetScope } from '@/lib/assets/contracts'
 
 type UpdateLabelBody = {
@@ -32,18 +32,26 @@ export const POST = apiHandler(async (
     }
     const authResult = await requireProjectAuth(body.projectId)
     if (isErrorResponse(authResult)) return authResult
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_update_label',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: { assetId, ...body },
+      source: 'project-ui',
+    })
+    return NextResponse.json(result)
   } else {
     const authResult = await requireUserAuth()
     if (isErrorResponse(authResult)) return authResult
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_update_label',
+      projectId: 'global-asset-hub',
+      userId: authResult.session.user.id,
+      input: { assetId, ...body },
+      source: 'project-ui',
+    })
+    return NextResponse.json(result)
   }
-
-  await updateAssetRenderLabel({
-    scope: body.scope,
-    kind: body.kind,
-    assetId,
-    projectId: body.projectId,
-    newName: body.newName,
-  })
-
-  return NextResponse.json({ success: true })
 })

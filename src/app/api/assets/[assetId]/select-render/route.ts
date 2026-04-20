@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight, requireUserAuth } from '@/lib/api-auth'
-import { selectAssetRender } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind, AssetScope } from '@/lib/assets/contracts'
 
 type SelectRenderBody = {
@@ -16,35 +16,32 @@ export const POST = apiHandler(async (
 ) => {
   const { assetId } = await context.params
   const body = await request.json() as SelectRenderBody
-  if ((body.scope !== 'global' && body.scope !== 'project') || (body.kind !== 'character' && body.kind !== 'location' && body.kind !== 'prop')) {
+  if ((body.scope !== 'global' && body.scope !== 'project')) {
     throw new ApiError('INVALID_PARAMS')
   }
   if (body.scope === 'project') {
     if (!body.projectId) throw new ApiError('INVALID_PARAMS')
     const authResult = await requireProjectAuthLight(body.projectId)
     if (isErrorResponse(authResult)) return authResult
-    const result = await selectAssetRender({
-      kind: body.kind,
-      assetId,
-      body,
-      access: {
-        scope: 'project',
-        userId: authResult.session.user.id,
-        projectId: body.projectId,
-      },
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_select_render',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: { assetId, ...body },
+      source: 'project-ui',
     })
     return NextResponse.json(result)
   }
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
-  const result = await selectAssetRender({
-    kind: body.kind,
-    assetId,
-    body,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_select_render',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: { assetId, ...body },
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })

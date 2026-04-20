@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight, requireUserAuth } from '@/lib/api-auth'
-import { createAsset } from '@/lib/assets/services/asset-actions'
-import { readAssets } from '@/lib/assets/services/read-assets'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind, AssetScope } from '@/lib/assets/contracts'
 
 function isAssetScope(value: string | null): value is AssetScope {
@@ -30,25 +29,37 @@ export const GET = apiHandler(async (request: NextRequest) => {
     }
     const authResult = await requireProjectAuthLight(projectId)
     if (isErrorResponse(authResult)) return authResult
-    const assets = await readAssets({
-      scope,
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_read',
       projectId,
-      folderId,
-      kind: isAssetKind(kind) ? kind : null,
+      userId: authResult.session.user.id,
+      input: {
+        scope,
+        projectId,
+        folderId,
+        kind: isAssetKind(kind) ? kind : null,
+      },
+      source: 'project-ui',
     })
-    return NextResponse.json({ assets })
+    return NextResponse.json(result)
   } else {
     const authResult = await requireUserAuth()
     if (isErrorResponse(authResult)) return authResult
-    const assets = await readAssets({
-      scope,
-      projectId,
-      folderId,
-      kind: isAssetKind(kind) ? kind : null,
-    }, {
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_read',
+      projectId: 'global-asset-hub',
       userId: authResult.session.user.id,
+      input: {
+        scope,
+        projectId,
+        folderId,
+        kind: isAssetKind(kind) ? kind : null,
+      },
+      source: 'project-ui',
     })
-    return NextResponse.json({ assets })
+    return NextResponse.json(result)
   }
 })
 
@@ -64,7 +75,7 @@ function isCreatableKind(value: AssetKind | undefined): value is Extract<AssetKi
 
 export const POST = apiHandler(async (request: NextRequest) => {
   const body = await request.json() as CreateAssetBody
-  if (!body.scope || !isCreatableKind(body.kind)) {
+  if (body.scope !== 'project' && body.scope !== 'global') {
     throw new ApiError('INVALID_PARAMS')
   }
 
@@ -74,27 +85,26 @@ export const POST = apiHandler(async (request: NextRequest) => {
     }
     const authResult = await requireProjectAuthLight(body.projectId)
     if (isErrorResponse(authResult)) return authResult
-    const result = await createAsset({
-      kind: body.kind,
-      body,
-      access: {
-        scope: 'project',
-        userId: authResult.session.user.id,
-        projectId: body.projectId,
-      },
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_create',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: body,
+      source: 'project-ui',
     })
     return NextResponse.json(result)
   }
 
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
-  const result = await createAsset({
-    kind: body.kind,
-    body,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_create',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: body,
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })

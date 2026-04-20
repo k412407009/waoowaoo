@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight } from '@/lib/api-auth'
-import { copyAssetFromGlobal } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind } from '@/lib/assets/contracts'
 
 type CopyBody = {
@@ -21,14 +21,13 @@ export const POST = apiHandler(async (
   }
   const authResult = await requireProjectAuthLight(body.projectId)
   if (isErrorResponse(authResult)) return authResult
-  const result = await copyAssetFromGlobal({
-    kind: body.kind,
-    targetId: assetId,
-    globalAssetId: body.globalAssetId,
-    access: {
-      userId: authResult.session.user.id,
-      projectId: body.projectId,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_copy_from_global',
+    projectId: body.projectId,
+    userId: authResult.session.user.id,
+    input: { assetId, ...body },
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuthLight, requireUserAuth } from '@/lib/api-auth'
-import { removeAsset, updateAsset } from '@/lib/assets/services/asset-actions'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 import type { AssetKind, AssetScope } from '@/lib/assets/contracts'
 
 type UpdateAssetBody = {
@@ -32,29 +32,26 @@ export const PATCH = apiHandler(async (
     if (!body.projectId) throw new ApiError('INVALID_PARAMS')
     const authResult = await requireProjectAuthLight(body.projectId)
     if (isErrorResponse(authResult)) return authResult
-    const result = await updateAsset({
-      kind: body.kind,
-      assetId,
-      body,
-      access: {
-        scope: 'project',
-        userId: authResult.session.user.id,
-        projectId: body.projectId,
-      },
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_update',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: { assetId, ...body },
+      source: 'project-ui',
     })
     return NextResponse.json(result)
   }
 
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
-  const result = await updateAsset({
-    kind: body.kind,
-    assetId,
-    body,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_update',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: { assetId, ...body },
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })
@@ -83,27 +80,26 @@ export const DELETE = apiHandler(async (
     if (!body.projectId) throw new ApiError('INVALID_PARAMS')
     const authResult = await requireProjectAuthLight(body.projectId)
     if (isErrorResponse(authResult)) return authResult
-    const result = await removeAsset({
-      kind: body.kind,
-      assetId,
-      access: {
-        scope: 'project',
-        userId: authResult.session.user.id,
-        projectId: body.projectId,
-      },
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'api_assets_remove',
+      projectId: body.projectId,
+      userId: authResult.session.user.id,
+      input: { assetId, ...body },
+      source: 'project-ui',
     })
     return NextResponse.json(result)
   }
 
   const authResult = await requireUserAuth()
   if (isErrorResponse(authResult)) return authResult
-  const result = await removeAsset({
-    kind: body.kind,
-    assetId,
-    access: {
-      scope: 'global',
-      userId: authResult.session.user.id,
-    },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_assets_remove',
+    projectId: 'global-asset-hub',
+    userId: authResult.session.user.id,
+    input: { assetId, ...body },
+    source: 'project-ui',
   })
   return NextResponse.json(result)
 })
