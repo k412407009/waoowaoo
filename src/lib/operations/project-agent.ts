@@ -11,6 +11,10 @@ import { createLlmTaskOperations } from './llm-task-ops'
 import { createMediaOperations } from './media-ops'
 import { createConfigOperations } from './config-ops'
 import { createProjectDataOperations } from './project-data-ops'
+import { createProjectCrudOperations } from './project-crud-ops'
+import { createSystemProjectOperations } from './system-project-ops'
+import { createVideoOperations } from './video-ops'
+import { createDownloadOperations } from './download-ops'
 import { createHash, randomUUID } from 'crypto'
 import { ApiError, getRequestId } from '@/lib/api-errors'
 import { submitTask } from '@/lib/task/submitter'
@@ -341,7 +345,11 @@ function buildVideoPanelBillingInfoOrThrow(payload: unknown) {
 
 export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegistry {
   return {
+    ...createSystemProjectOperations(),
     ...createReadOperations(),
+    ...createProjectCrudOperations(),
+    ...createVideoOperations(),
+    ...createDownloadOperations(),
     ...createPlanOperations(),
     ...createGovernanceOperations(),
     ...createEditOperations(),

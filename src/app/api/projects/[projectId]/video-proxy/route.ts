@@ -1,56 +1,79 @@
-import { logInfo as _ulogInfo } from '@/lib/logging/core'
 import { NextRequest } from 'next/server'
-import { getSignedUrl, toFetchableUrl } from '@/lib/storage'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
  * 代理下载单个视频文件
- * 用于解决 COS 跨域下载问题
+ * 用于解决存储跨域下载问题
  */
 export const GET = apiHandler(async (
-    request: NextRequest,
-    context: { params: Promise<{ projectId: string }> }
+  request: NextRequest,
+  context: { params: Promise<{ projectId: string }> }
 ) => {
-    const { projectId } = await context.params
-    const { searchParams } = new URL(request.url)
-    const videoKey = searchParams.get('key')
+  const { projectId } = await context.params
+  const { searchParams } = new URL(request.url)
+  const key = searchParams.get('key')?.trim() || ''
 
-    if (!videoKey) {
-        throw new ApiError('INVALID_PARAMS')
-    }
+  if (!key) {
+    throw new ApiError('INVALID_PARAMS', {
+      field: 'key',
+      message: 'key is required',
+    })
+  }
 
-    // 🔐 统一权限验证
-    const authResult = await requireProjectAuthLight(projectId)
-    if (isErrorResponse(authResult)) return authResult
+  const authResult = await requireProjectAuthLight(projectId)
+  if (isErrorResponse(authResult)) return authResult
 
-    // 生成签名 URL 并下载
-    let fetchUrl: string
-    if (videoKey.startsWith('http://') || videoKey.startsWith('https://')) {
-        fetchUrl = videoKey
-    } else {
-        fetchUrl = toFetchableUrl(getSignedUrl(videoKey, 3600))
-    }
+  const resolved = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'resolve_video_proxy',
+    projectId,
+    userId: authResult.session.user.id,
+    input: {
+      key,
+      expiresSeconds: 3600,
+    },
+    source: 'project-ui',
+  })
 
-    _ulogInfo(`[视频代理] 下载: ${fetchUrl.substring(0, 100)}...`)
+  if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)) {
+    throw new ApiError('EXTERNAL_ERROR', {
+      code: 'VIDEO_PROXY_RESOLUTION_INVALID',
+      message: 'resolve_video_proxy returned invalid payload',
+    })
+  }
 
-    const response = await fetch(fetchUrl)
-    if (!response.ok) {
-        throw new Error(`Failed to fetch video: ${response.statusText}`)
-    }
+  const fetchUrl = typeof (resolved as { fetchUrl?: unknown }).fetchUrl === 'string'
+    ? (resolved as { fetchUrl: string }).fetchUrl
+    : ''
+  if (!fetchUrl) {
+    throw new ApiError('EXTERNAL_ERROR', {
+      code: 'VIDEO_PROXY_RESOLUTION_INVALID',
+      message: 'resolve_video_proxy missing fetchUrl',
+    })
+  }
 
-    // 获取内容类型和长度
-    const contentType = response.headers.get('content-type') || 'video/mp4'
-    const contentLength = response.headers.get('content-length')
+  const response = await fetch(fetchUrl)
+  if (!response.ok) {
+    throw new ApiError('EXTERNAL_ERROR', {
+      code: 'VIDEO_PROXY_FETCH_FAILED',
+      message: `Failed to fetch video: ${response.status} ${response.statusText}`,
+      status: response.status,
+    })
+  }
 
-    // 流式返回视频数据
-    const headers: HeadersInit = {
-        'Content-Type': contentType,
-        'Cache-Control': 'no-cache'
-    }
-    if (contentLength) {
-        headers['Content-Length'] = contentLength
-    }
+  const contentType = response.headers.get('content-type') || 'video/mp4'
+  const contentLength = response.headers.get('content-length')
 
-    return new Response(response.body, { headers })
+  const headers: HeadersInit = {
+    'Content-Type': contentType,
+    'Cache-Control': 'no-cache',
+  }
+  if (contentLength) {
+    headers['Content-Length'] = contentLength
+  }
+
+  return new Response(response.body, { headers })
 })
+
