@@ -19,6 +19,22 @@ vi.mock('@/lib/user-api/model-llm-protocol-probe', () => ({
   probeModelLlmProtocol: probeModelLlmProtocolMock,
 }))
 
+vi.mock('@/lib/user-api/llm-test-connection', () => ({
+  testLlmConnection: vi.fn(),
+}))
+
+vi.mock('@/lib/user-api/provider-test', () => ({
+  testProviderConnection: vi.fn(),
+}))
+
+vi.mock('@/lib/user-api/model-template', () => ({
+  validateOpenAICompatMediaTemplate: vi.fn(() => ({ ok: false, template: null, issues: [] })),
+}))
+
+vi.mock('@/lib/user-api/model-template/probe', () => ({
+  probeMediaTemplate: vi.fn(),
+}))
+
 describe('api specific - user api-config llm protocol probe', () => {
   const routeContext = { params: Promise.resolve({}) }
 

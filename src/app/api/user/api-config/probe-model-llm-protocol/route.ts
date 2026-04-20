@@ -1,22 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireUserAuth } from '@/lib/api-auth'
-import { getProviderKey } from '@/lib/api-config'
-import { probeModelLlmProtocol } from '@/lib/user-api/model-llm-protocol-probe'
+import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 type ProbeRequestBody = {
   providerId?: unknown
   modelId?: unknown
-}
-
-function readRequiredString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new ApiError('INVALID_PARAMS', {
-      code: 'MODEL_LLM_PROTOCOL_PROBE_INVALID',
-      field,
-    })
-  }
-  return value.trim()
 }
 
 export const POST = apiHandler(async (request: NextRequest) => {
@@ -33,20 +22,13 @@ export const POST = apiHandler(async (request: NextRequest) => {
     })
   }
 
-  const providerId = readRequiredString(body.providerId, 'providerId')
-  const modelId = readRequiredString(body.modelId, 'modelId')
-
-  if (getProviderKey(providerId) !== 'openai-compatible') {
-    throw new ApiError('INVALID_PARAMS', {
-      code: 'MODEL_LLM_PROTOCOL_PROBE_PROVIDER_INVALID',
-      field: 'providerId',
-    })
-  }
-
-  const result = await probeModelLlmProtocol({
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'api_user_api_config_probe_model_llm_protocol',
+    projectId: 'system',
     userId: authResult.session.user.id,
-    providerId,
-    modelId,
+    input: body,
+    source: 'api-config',
   })
 
   return NextResponse.json(result)
