@@ -77,10 +77,20 @@ export interface ProjectPhasePartData {
   snapshot: ProjectPhaseSnapshot
 }
 
+export interface ProjectAgentStopPartData {
+  reason: 'step_cap'
+  stepCount: number
+  maxSteps: number
+}
+
 export interface ConfirmationRequestPartData {
   operationId: string
   summary: string
   argsHint?: Record<string, unknown> | null
+  budget?: {
+    key?: string
+    estimatedCostUnits?: number
+  } | null
 }
 
 export interface TaskSubmittedPartData {
@@ -132,6 +142,7 @@ export interface ProjectAssistantThreadSnapshot {
 }
 
 export type WorkspaceAssistantPartType =
+  | 'data-agent-stop'
   | 'data-project-phase'
   | 'data-confirmation-request'
   | 'data-task-submitted'

@@ -40,6 +40,8 @@ export interface OperationSideEffects {
   mode: OperationMode
   risk: OperationRiskLevel
   billable?: boolean
+  budgetKey?: string
+  estimatedCostUnits?: number
   requiresConfirmation?: boolean
   confirmationSummary?: string
   overwrite?: boolean
@@ -47,6 +49,32 @@ export interface OperationSideEffects {
   destructive?: boolean
   longRunning?: boolean
 }
+
+export type ProjectAgentToolErrorCode =
+  | 'CONFIRMATION_REQUIRED'
+  | 'OPERATION_EXECUTION_FAILED'
+  | 'OPERATION_INPUT_INVALID'
+  | 'OPERATION_NOT_FOUND'
+  | 'OPERATION_OUTPUT_INVALID'
+
+export interface ProjectAgentToolError {
+  code: ProjectAgentToolErrorCode
+  message: string
+  operationId?: ProjectAgentOperationId
+  details?: Record<string, unknown> | null
+  issues?: unknown
+}
+
+export type ProjectAgentToolResult<T> =
+  | {
+      ok: true
+      data: T
+    }
+  | {
+      ok: false
+      confirmationRequired?: boolean
+      error: ProjectAgentToolError
+    }
 
 export interface ProjectAgentOperationDefinition {
   id: ProjectAgentOperationId

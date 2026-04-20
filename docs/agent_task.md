@@ -1337,11 +1337,11 @@ system prompt 需要从当前的轻量规则，升级为包含：
 
 同时：
 
-- `maxSteps` 从 6 提升到更高上限（当前代码为 `stepCountIs(120)`），目标升级为**自适应停止 + 硬上限 999**
+- `maxSteps` 从 6 提升到自适应停止（cap=999），作为硬上限防止 runaway
 
 实现对齐（截至 2026-04-17）：
 
-- `src/lib/project-agent/runtime.ts` 当前为 `stepCountIs(120)`；后续计划：自适应停止 + cap=999
+- `src/lib/project-agent/runtime.ts` 已改为自适应停止 + cap=999，并在达到上限时显式提示
 - prompt 注入已包含 `failedItems` 与 `staleArtifacts` 的摘要字段，便于模型做异常解释与推荐动作
 
 #### 4. Context 分层
@@ -1524,7 +1524,7 @@ system prompt 需要从当前的轻量规则，升级为包含：
 
 #### Phase 4：收敛交互体验
 
-- 提升 `maxSteps`
+- 提升 `maxSteps`（已完成：自适应停止 + cap=999）
 - 优化 prompt
 - 优化 workspace 与 assistant 状态同步
 - 必要时将前端事件桥接逐步替换为更权威的服务端状态驱动
@@ -1553,7 +1553,7 @@ system prompt 需要从当前的轻量规则，升级为包含：
 | P8   | 项目阶段推导 `resolveProjectPhase`        | 部分完成 | 中       | 已实现最小 phase 解析与 `get_project_phase`，后续还需补失败项/stale artifacts/更细粒度阶段                                                                                  |
 | P9   | Act Mode 直接操作 tools                   | 部分完成 | 低       | 已接入 `generate_character_image` / `generate_location_image` / `modify_asset_image` / `regenerate_panel_image` / `panel_variant` / `voice_design` / `voice_generate` / `lip_sync` / `generate_video`（提交异步 task，需确认）；撤回治理类操作仍未接入 |
 | P10  | Task 查询桥接能力                         | 已完成   | 中       | 已接入最小 `get_task_status` operation，复用现有 `queryTaskTargetStates()`                                                                                                  |
-| P11  | Prompt 升级与双模式选择规则               | 部分完成 | 中       | 已注入 `phase + progress + available actions` 摘要，并落地 `operation.sideEffects` + confirmed 二次确认卡片；Act/Plan 分流与更系统的规范仍需补完                            |
+| P11  | Prompt 升级与双模式选择规则               | 部分完成 | 中       | 已注入 `phase + progress + available actions` 摘要，tool 错误结构化返回 + confirmed gate 已落地；Act/Plan 分流与更系统的规范仍需补完                                  |
 | P12  | Lite / Full Context 拆分                  | 未开始   | 低       | 当前已去掉无意义 wrapper，但仍未拆成明确 lite/full 两套上下文（建议升级为 projection lite/full）                                                                            |
 | P13  | Act Mode 富渲染组件                       | 部分完成 | 低中     | 已新增 `project phase` + `confirmation request` + `task submitted`/`task batch submitted` 卡片，并支持显示 `undoBatchId` 与一键撤回；其他 act-mode 结果卡仍未实现            |
 | P14  | Workspace 与 Assistant 状态统一           | 部分完成 | 中       | 当前有前端事件桥接，但仍是过渡形态                                                                                                                                          |

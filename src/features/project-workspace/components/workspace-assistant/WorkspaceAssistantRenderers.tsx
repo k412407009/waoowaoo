@@ -12,6 +12,7 @@ import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from '@/componen
 import type {
   ApprovalRequestPartData,
   ConfirmationRequestPartData,
+  ProjectAgentStopPartData,
   ProjectContextPartData,
   ProjectPhasePartData,
   ScriptPreviewPartData,
@@ -116,6 +117,16 @@ function ProjectPhaseDataCard({ data }: DataMessagePartProps<ProjectPhasePartDat
         <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Storyboards {String(data.snapshot.progress.storyboardCount)}</div>
         <div className="rounded-xl bg-[var(--glass-bg-muted)]/70 px-3 py-2">Voice {String(data.snapshot.progress.voiceLineCount)}</div>
       </div>
+    </div>
+  )
+}
+
+export function AgentStopDataCard({ data }: DataMessagePartProps<ProjectAgentStopPartData>) {
+  return (
+    <div className="rounded-2xl border border-[var(--glass-tone-warn-fg)]/30 bg-[var(--glass-bg-muted)]/70 p-3 text-xs text-[var(--glass-text-secondary)]">
+      <div className="text-sm font-medium text-[var(--glass-text-primary)]">已达到最大步数</div>
+      <div className="mt-1">当前步数 {String(data.stepCount)} / 上限 {String(data.maxSteps)}</div>
+      <div className="mt-2 text-[var(--glass-text-tertiary)]">原因：{data.reason}</div>
     </div>
   )
 }
@@ -417,6 +428,7 @@ export function useWorkspaceAssistantMessagePartComponents({
     },
     data: {
       by_name: {
+        'agent-stop': AgentStopDataCard,
         'project-phase': ProjectPhaseDataCard,
         'confirmation-request': ConfirmationRequestDataCard,
         'task-submitted': TaskSubmittedDataCard,

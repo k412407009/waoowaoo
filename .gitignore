@@ -90,6 +90,7 @@ docs/*
 !docs/agent_design_analysis.md
 !docs/ai-assistant-domain-architecture-goals.md
 !docs/operation_tool_api_alignment_report.md
+!docs/agent_delivery_progress.md
 # GitHub CI workflows (internal)
 # .github/ — 只保留 workflows，忽略其他
 .github/*

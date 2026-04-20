@@ -1,7 +1,13 @@
 import type { UIMessage, UIMessageStreamWriter } from 'ai'
 import type { NextRequest } from 'next/server'
 import { createProjectAgentOperationRegistry } from '@/lib/operations/registry'
-import { writeOperationDataPart, type OperationSideEffects } from '@/lib/operations/types'
+import {
+  writeOperationDataPart,
+  type OperationSideEffects,
+  type ProjectAgentToolError,
+  type ProjectAgentToolErrorCode,
+  type ProjectAgentToolResult,
+} from '@/lib/operations/types'
 import type { ConfirmationRequestPartData, ProjectAgentContext } from '@/lib/project-agent/types'
 
 function shouldRequireAssistantConfirmation(sideEffects: OperationSideEffects | undefined): boolean {
@@ -14,6 +20,35 @@ function shouldRequireAssistantConfirmation(sideEffects: OperationSideEffects | 
   return false
 }
 
+function toMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message.trim()
+    return message || 'PROJECT_AGENT_OPERATION_FAILED'
+  }
+  if (typeof error === 'string' && error.trim()) return error.trim()
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return 'PROJECT_AGENT_OPERATION_FAILED'
+  }
+}
+
+function buildToolError(params: {
+  code: ProjectAgentToolErrorCode
+  message: string
+  operationId: string
+  details?: Record<string, unknown> | null
+  issues?: unknown
+}): ProjectAgentToolError {
+  return {
+    code: params.code,
+    message: params.message,
+    operationId: params.operationId,
+    details: params.details ?? null,
+    ...(params.issues !== undefined ? { issues: params.issues } : {}),
+  }
+}
+
 export async function executeProjectAgentOperationFromTool(params: {
   request: NextRequest
   operationId: string
@@ -23,18 +58,31 @@ export async function executeProjectAgentOperationFromTool(params: {
   source: string
   writer: UIMessageStreamWriter<UIMessage>
   input: unknown
-}) {
+}): Promise<ProjectAgentToolResult<unknown>> {
   const registry = createProjectAgentOperationRegistry()
   const operation = registry[params.operationId]
   if (!operation) {
-    throw new Error(`operation not found: ${params.operationId}`)
+    return {
+      ok: false,
+      error: buildToolError({
+        code: 'OPERATION_NOT_FOUND',
+        message: `operation not found: ${params.operationId}`,
+        operationId: params.operationId,
+      }),
+    }
   }
 
   const parsed = operation.inputSchema.safeParse(params.input)
   if (!parsed.success) {
-    const error = new Error('PROJECT_AGENT_INVALID_OPERATION_INPUT')
-    ;(error as Error & { issues?: unknown }).issues = parsed.error.issues
-    throw error
+    return {
+      ok: false,
+      error: buildToolError({
+        code: 'OPERATION_INPUT_INVALID',
+        message: 'PROJECT_AGENT_INVALID_OPERATION_INPUT',
+        operationId: params.operationId,
+        issues: parsed.error.issues,
+      }),
+    }
   }
 
   const requiresConfirmation = shouldRequireAssistantConfirmation(operation.sideEffects)
@@ -45,6 +93,14 @@ export async function executeProjectAgentOperationFromTool(params: {
       && (parsed.data as { confirmed?: unknown }).confirmed === true
     )
     if (!confirmed) {
+      const budgetKey = operation.sideEffects?.budgetKey
+      const estimatedCostUnits = operation.sideEffects?.estimatedCostUnits
+      const budget = !budgetKey && estimatedCostUnits === undefined
+        ? null
+        : {
+            ...(budgetKey ? { key: budgetKey } : {}),
+            ...(estimatedCostUnits !== undefined ? { estimatedCostUnits } : {}),
+          }
       writeOperationDataPart<ConfirmationRequestPartData>(params.writer, 'data-confirmation-request', {
         operationId: params.operationId,
         summary: operation.sideEffects?.confirmationSummary
@@ -53,27 +109,59 @@ export async function executeProjectAgentOperationFromTool(params: {
           ...(parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data) ? parsed.data as Record<string, unknown> : {}),
           confirmed: true,
         },
+        ...(budget ? { budget } : {}),
       })
       return {
+        ok: false,
         confirmationRequired: true,
-        operationId: params.operationId,
+        error: buildToolError({
+          code: 'CONFIRMATION_REQUIRED',
+          message: operation.sideEffects?.confirmationSummary
+            || `执行 ${params.operationId} 会产生写入或计费副作用。请在确认后重试，并在参数中带 confirmed=true。`,
+          operationId: params.operationId,
+          details: budget ? { budget } : null,
+        }),
       }
     }
   }
 
-  const result = await operation.execute({
-    request: params.request,
-    userId: params.userId,
-    projectId: params.projectId,
-    context: params.context,
-    source: params.source,
-    writer: params.writer,
-  }, parsed.data)
+  let result: unknown
+  try {
+    result = await operation.execute({
+      request: params.request,
+      userId: params.userId,
+      projectId: params.projectId,
+      context: params.context,
+      source: params.source,
+      writer: params.writer,
+    }, parsed.data)
+  } catch (error) {
+    return {
+      ok: false,
+      error: buildToolError({
+        code: 'OPERATION_EXECUTION_FAILED',
+        message: toMessage(error),
+        operationId: params.operationId,
+        details: error instanceof Error && error.cause
+          ? { cause: error.cause }
+          : null,
+      }),
+    }
+  }
   const outputParsed = operation.outputSchema.safeParse(result)
   if (!outputParsed.success) {
-    const error = new Error('PROJECT_AGENT_OPERATION_OUTPUT_INVALID')
-    ;(error as Error & { issues?: unknown }).issues = outputParsed.error.issues
-    throw error
+    return {
+      ok: false,
+      error: buildToolError({
+        code: 'OPERATION_OUTPUT_INVALID',
+        message: 'PROJECT_AGENT_OPERATION_OUTPUT_INVALID',
+        operationId: params.operationId,
+        issues: outputParsed.error.issues,
+      }),
+    }
   }
-  return outputParsed.data
+  return {
+    ok: true,
+    data: outputParsed.data,
+  }
 }

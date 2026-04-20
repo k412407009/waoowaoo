@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NextRequest } from 'next/server'
 import { buildMockRequest } from '../../../helpers/request'
 
 const authState = vi.hoisted(() => ({
@@ -92,6 +93,66 @@ describe('project assistant chat route', () => {
     }))
   })
 
+  it('POST /api/projects/[projectId]/assistant/chat -> rejects unauthenticated requests', async () => {
+    authState.authenticated = false
+    const response = await chatPost(
+      buildMockRequest({
+        path: '/api/projects/project-1/assistant/chat',
+        method: 'POST',
+        body: {
+          messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }],
+        },
+      }),
+      { params: Promise.resolve({ projectId: 'project-1' }) },
+    )
+
+    expect(response.status).toBe(401)
+  })
+
+  it('POST /api/projects/[projectId]/assistant/chat -> validates JSON body', async () => {
+    const request = new NextRequest(new URL('http://localhost:3000/api/projects/project-1/assistant/chat'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    })
+
+    const response = await chatPost(
+      request,
+      { params: Promise.resolve({ projectId: 'project-1' }) },
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      error: expect.objectContaining({
+        code: 'INVALID_PARAMS',
+        details: expect.objectContaining({ code: 'BODY_PARSE_FAILED' }),
+      }),
+    }))
+  })
+
+  it('POST /api/projects/[projectId]/assistant/chat -> maps runtime errors into API error payloads', async () => {
+    projectAgentMock.createProjectAgentChatResponse.mockRejectedValueOnce(new Error('PROJECT_AGENT_MODEL_NOT_CONFIGURED'))
+
+    const response = await chatPost(
+      buildMockRequest({
+        path: '/api/projects/project-1/assistant/chat',
+        method: 'POST',
+        body: {
+          messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hello' }] }],
+        },
+      }),
+      { params: Promise.resolve({ projectId: 'project-1' }) },
+    )
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      error: expect.objectContaining({
+        code: 'MISSING_CONFIG',
+        details: expect.objectContaining({ code: 'PROJECT_AGENT_MODEL_NOT_CONFIGURED' }),
+      }),
+    }))
+  })
+
   it('GET /api/projects/[projectId]/assistant/chat -> loads persisted workspace thread from database service', async () => {
     persistenceMock.loadProjectAssistantThread.mockResolvedValueOnce({
       id: 'thread-1',
@@ -135,6 +196,19 @@ describe('project assistant chat route', () => {
         scopeRef: 'episode:episode-1',
       }),
     })
+  })
+
+  it('GET /api/projects/[projectId]/assistant/chat -> rejects unauthenticated requests', async () => {
+    authState.authenticated = false
+    const response = await chatGet(
+      buildMockRequest({
+        path: '/api/projects/project-1/assistant/chat',
+        method: 'GET',
+      }),
+      { params: Promise.resolve({ projectId: 'project-1' }) },
+    )
+
+    expect(response.status).toBe(401)
   })
 
   it('PUT /api/projects/[projectId]/assistant/chat -> saves workspace thread to database service', async () => {

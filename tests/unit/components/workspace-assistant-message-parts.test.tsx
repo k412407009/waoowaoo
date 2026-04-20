@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ApprovalCard,
+  AgentStopDataCard,
   HiddenApprovalRequestDataCard,
   ScriptPreviewDataCard,
   StoryboardPreviewDataCard,
@@ -140,6 +141,25 @@ describe('workspace assistant renderers', () => {
     expect(html).toContain('Storyboard Preview')
     expect(html).toContain('片段摘要')
     expect(html).toContain('镜头摘要')
+  })
+
+  it('renders agent stop card when cap is reached', () => {
+    const html = renderToStaticMarkup(
+      <AgentStopDataCard
+        data={{
+          reason: 'step_cap',
+          stepCount: 999,
+          maxSteps: 999,
+        }}
+        type="data"
+        name="agent-stop"
+        status={{ type: 'complete' }}
+      />,
+    )
+
+    expect(html).toContain('已达到最大步数')
+    expect(html).toContain('999')
+    expect(html).toContain('step_cap')
   })
 
   it('renders tool cards collapsed by default', () => {

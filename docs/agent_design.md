@@ -56,7 +56,7 @@ createProjectAgentChatResponse()
   ├─ resolveProjectAgentLanguageModel() → AI SDK model
   ├─ createProjectAgentOperationRegistry() → operation map
   ├─ operations → tools（自动组装）
-  └─ streamText(model, system, messages, tools, stopWhen=stepCountIs(N))
+    └─ streamText(model, system, messages, tools, stopWhen=adaptiveStop(cap=999))
         │
         └─ tool call → executeProjectAgentOperationFromTool()
               ├─ inputSchema 校验
@@ -97,8 +97,8 @@ createProjectAgentChatResponse()
 
 已确认的目标约束：
 
-- 需要 **自适应停止**：让 agent 自己判断任务完成，不再依赖“12/120 这类固定阈值”来决定是否停止。
-- 仍保留一个 **硬上限 999**：避免 runaway loop。
+- 需要 **自适应停止**：让 agent 自己判断任务完成，不再依赖固定阈值来决定是否停止。
+- 仍保留一个 **硬上限 999**：作为 stop cap，避免 runaway loop，且达到上限需显式报告原因。
 
 落地建议（实现细节可由 coding agent 选择最小改动方案）：
 
@@ -197,4 +197,3 @@ createProjectAgentChatResponse()
 2. runtime：自适应停止 + cap=999
 3. confirmed gate：保持强制 confirmed，同时为未来预算授权预留接口/元信息
 4. projection 补全与 operation 覆盖面提升（按收益推进）
-

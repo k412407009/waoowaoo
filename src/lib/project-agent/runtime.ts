@@ -3,7 +3,6 @@ import {
   createUIMessageStream,
   createUIMessageStreamResponse,
   safeValidateUIMessages,
-  stepCountIs,
   streamText,
   tool,
   type LanguageModel,
@@ -17,8 +16,11 @@ import { createProjectAgentOperationRegistry } from '@/lib/operations/registry'
 import { getUserModelConfig } from '@/lib/config-service'
 import { resolveLlmRuntimeModel } from '@/lib/llm/runtime-shared'
 import { executeProjectAgentOperationFromTool } from '@/lib/adapters/tools/execute-project-agent-operation'
+import { writeOperationDataPart } from '@/lib/operations/types'
 import type { ProjectAgentContext } from './types'
 import { resolveProjectPhase } from './project-phase'
+import { createProjectAgentStopController } from './stop-conditions'
+import type { ProjectAgentStopPartData } from './types'
 
 function normalizeProjectAgentContext(raw: unknown): ProjectAgentContext {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
@@ -138,6 +140,7 @@ export async function createProjectAgentChatResponse(input: {
     originalMessages: normalizedMessages,
     execute: async ({ writer }) => {
       const operations = createProjectAgentOperationRegistry()
+      const stopController = createProjectAgentStopController()
       const tools = Object.fromEntries(
         Object.entries(operations).map(([operationId, operation]) => [
           operationId,
@@ -177,7 +180,12 @@ export async function createProjectAgentChatResponse(input: {
         }),
         messages: await toModelMessages(normalizedMessages),
         tools,
-        stopWhen: stepCountIs(120),
+        stopWhen: stopController.stopWhen,
+        onFinish: ({ steps }) => {
+          const stopPart = stopController.buildStopPart(steps.length)
+          if (!stopPart) return
+          writeOperationDataPart<ProjectAgentStopPartData>(writer, 'data-agent-stop', stopPart)
+        },
         temperature: 0.2,
       })
 

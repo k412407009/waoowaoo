@@ -27,7 +27,7 @@
     ├── resolveProjectAgentLanguageModel() → AI SDK model
     ├── createProjectAgentOperationRegistry() → 71 operations
     ├── 自动组装 71 个 tools (operationId → tool)
-    └── streamText(model, prompt, tools, maxSteps=120)
+    └── streamText(model, prompt, tools, stopWhen=adaptive cap=999)
               │
               ├── tool call → executeProjectAgentOperationFromTool()
               │                  ├── inputSchema 校验
@@ -36,7 +36,7 @@
               │                  └── operation.execute(context, input)
               │                        └── 直连 prisma / submitTask
               │
-              └── LLM 观察 tool result → 决定下一步 (最多 120 步)
+              └── LLM 观察 tool result → 决定下一步 (自适应停止，cap=999)
 
   GUI 操作 → API route ─┬─ 38% → executeProjectAgentOperationFromApi() → operation.execute
                         └─ 62% → 直连 prisma/submitTask（旁路 operation）
@@ -91,7 +91,7 @@ Tool ──100%──→ Operation（71 个 operation = 71 个 tool，由 regist
 
 | 特性              | 现状                                                                                           |
 | ----------------- | ---------------------------------------------------------------------------------------------- |
-| maxSteps          | **120**（硬编码上限）                                                                          |
+| maxSteps          | **自适应停止 + cap=999**（硬上限，仅作为安全阈值）                                               |
 | 项目阶段感知      | ✅ `resolveProjectPhase` → 6 种 phase + progress + failedItems + staleArtifacts                |
 | Act/Plan 分流     | ✅ 基于 `sideEffects` 元数据自动判断                                                           |
 | 确认 gate         | ✅ `shouldRequireAssistantConfirmation()` 自动对 billable/destructive/bulk 要求 confirmed=true |
@@ -105,14 +105,14 @@ Tool ──100%──→ Operation（71 个 operation = 71 个 tool，由 regist
 
 ### 🔴 P0 – 高优先级
 
-#### 1. Tool 内 throw 导致 LLM 无法自愈（影响最大）
+#### 1. Tool 内 throw 导致 LLM 无法自愈（已修复：改为结构化错误返回）
 
 ```typescript
 // runtime.ts:188
 onError: (error) => (error instanceof Error ? error.message : String(error)),
 ```
 
-Tool 内 `throw new Error(...)` → 错误被 stream 捕获 → **LLM 看不到错误原因** → 无法重试/换参数。应改为 tool 返回结构化错误对象。
+Tool 内 `throw new Error(...)` → 错误被 stream 捕获 → **LLM 看不到错误原因** → 无法重试/换参数。已改为 tool 返回结构化错误对象（`ok=false + error`）。
 
 #### 2. Operation 覆盖面不足（62% API 写入口未接入）
 
