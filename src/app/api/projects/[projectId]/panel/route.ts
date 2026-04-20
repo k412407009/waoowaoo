@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
@@ -65,23 +64,13 @@ export const DELETE = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const panel = await prisma.projectPanel.findUnique({
-    where: { id: panelId },
-    select: { storyboardId: true },
-  })
-
-  if (!panel) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const result = await executeProjectAgentOperationFromApi({
+  await executeProjectAgentOperationFromApi({
     request,
     operationId: 'mutate_storyboard',
     projectId,
     userId: authResult.session.user.id,
     input: {
       action: 'delete_panel',
-      storyboardId: panel.storyboardId,
       panelId,
     },
     source: 'project-ui',
@@ -112,15 +101,6 @@ export const PATCH = apiHandler(async (
 
   // 🔥 方式1：通过 panelId 直接更新（优先）
   if (panelId) {
-    const panel = await prisma.projectPanel.findUnique({
-      where: { id: panelId },
-      select: { storyboardId: true },
-    })
-
-    if (!panel) {
-      throw new ApiError('NOT_FOUND')
-    }
-
     await executeProjectAgentOperationFromApi({
       request,
       operationId: 'mutate_storyboard',
@@ -128,7 +108,6 @@ export const PATCH = apiHandler(async (
       userId: authResult.session.user.id,
       input: {
         action: 'update_panel_prompt',
-        storyboardId: panel.storyboardId,
         panelId,
         ...(videoPrompt !== undefined ? { videoPrompt } : {}),
         ...(firstLastFramePrompt !== undefined ? { firstLastFramePrompt } : {}),

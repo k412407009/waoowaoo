@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuth, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
@@ -18,12 +17,16 @@ export const GET = apiHandler(async (
   if (isErrorResponse(authResult)) return authResult
   const { project } = authResult
 
-  const episodes = await prisma.projectEpisode.findMany({
-    where: { projectId: project.id },
-    orderBy: { episodeNumber: 'asc' }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'list_episodes',
+    projectId: project.id,
+    userId: authResult.session.user.id,
+    input: {},
+    source: 'project-ui',
   })
 
-  return NextResponse.json({ episodes })
+  return NextResponse.json(result)
 })
 
 /**

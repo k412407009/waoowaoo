@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { attachMediaFieldsToProject } from '@/lib/media/attach'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 /**
@@ -26,20 +24,16 @@ export const GET = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    // 获取剧集的分镜数据
-    const storyboards = await prisma.projectStoryboard.findMany({
-        where: { episodeId },
-        include: {
-            clip: true,
-            panels: { orderBy: { panelIndex: 'asc' } }
-        },
-        orderBy: { createdAt: 'asc' }
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'list_storyboards',
+      projectId,
+      userId: authResult.session.user.id,
+      input: { episodeId },
+      source: 'project-ui',
     })
 
-    const withMedia = await attachMediaFieldsToProject({ storyboards })
-    const processedStoryboards = withMedia.storyboards || storyboards
-
-    return NextResponse.json({ storyboards: processedStoryboards })
+    return NextResponse.json(result)
 })
 
 /**

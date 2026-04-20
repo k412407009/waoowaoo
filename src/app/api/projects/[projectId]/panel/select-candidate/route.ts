@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
@@ -32,11 +31,6 @@ export const POST = apiHandler(async (
 
   // === 取消操作 ===
   if (action === 'cancel') {
-    const panel = await prisma.projectPanel.findUnique({
-      where: { id: panelId },
-      select: { storyboardId: true },
-    })
-    if (!panel) throw new ApiError('NOT_FOUND')
     await executeProjectAgentOperationFromApi({
       request,
       operationId: 'mutate_storyboard',
@@ -44,7 +38,6 @@ export const POST = apiHandler(async (
       userId: authResult.session.user.id,
       input: {
         action: 'cancel_panel_candidates',
-        storyboardId: panel.storyboardId,
         panelId,
       },
       source: 'project-ui',
@@ -61,12 +54,6 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const panel = await prisma.projectPanel.findUnique({
-    where: { id: panelId },
-    select: { storyboardId: true },
-  })
-  if (!panel) throw new ApiError('NOT_FOUND')
-
   const result = await executeProjectAgentOperationFromApi({
     request,
     operationId: 'mutate_storyboard',
@@ -74,7 +61,6 @@ export const POST = apiHandler(async (
     userId: authResult.session.user.id,
     input: {
       action: 'select_panel_candidate',
-      storyboardId: panel.storyboardId,
       panelId,
       selectedImageUrl,
     },

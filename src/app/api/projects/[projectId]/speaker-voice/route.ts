@@ -1,23 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { getSignedUrl } from '@/lib/storage'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
-import {
-  parseSpeakerVoiceMap,
-  type SpeakerVoiceMap,
-} from '@/lib/voice/provider-voice-binding'
 
 function readTrimmedString(input: unknown): string | null {
   if (typeof input !== 'string') return null
   const value = input.trim()
   return value.length > 0 ? value : null
-}
-
-function signUrlIfNeeded(url: string): string {
-  if (url.startsWith('http')) return url
-  return getSignedUrl(url, 7200)
 }
 
 /**
@@ -39,37 +28,16 @@ export const GET = apiHandler(async (
     throw new ApiError('INVALID_PARAMS')
   }
 
-  const episode = await prisma.projectEpisode.findUnique({
-    where: { id: episodeId },
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'get_speaker_voices',
+    projectId,
+    userId: authResult.session.user.id,
+    input: { episodeId },
+    source: 'project-ui',
   })
 
-  if (!episode) {
-    throw new ApiError('NOT_FOUND')
-  }
-
-  const storedSpeakerVoices = parseSpeakerVoiceMap(episode.speakerVoices)
-  const speakerVoices: SpeakerVoiceMap = {}
-
-  for (const [speaker, voice] of Object.entries(storedSpeakerVoices)) {
-    if (voice.provider === 'fal') {
-      speakerVoices[speaker] = {
-        provider: 'fal',
-        voiceType: voice.voiceType,
-        audioUrl: signUrlIfNeeded(voice.audioUrl),
-      }
-      continue
-    }
-
-    const previewAudioUrl = voice.previewAudioUrl ? signUrlIfNeeded(voice.previewAudioUrl) : undefined
-    speakerVoices[speaker] = {
-      provider: 'bailian',
-      voiceType: voice.voiceType,
-      voiceId: voice.voiceId,
-      ...(previewAudioUrl ? { previewAudioUrl } : {}),
-    }
-  }
-
-  return NextResponse.json({ speakerVoices })
+  return NextResponse.json(result)
 })
 
 /**

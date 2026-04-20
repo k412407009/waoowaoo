@@ -1,34 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { apiHandler } from '@/lib/api-errors'
-import { forbidden, notFound, requireUserAuth } from '@/lib/api-auth'
-import { prisma } from '@/lib/prisma'
+import { ApiError, apiHandler } from '@/lib/api-errors'
+import { isErrorResponse, requireUserAuth } from '@/lib/api-auth'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
 
 export const POST = apiHandler(async (
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ batchId: string }> },
 ) => {
   const { batchId } = await context.params
   const authResult = await requireUserAuth()
-  if (authResult instanceof NextResponse) return authResult
+  if (isErrorResponse(authResult)) return authResult
   const { session } = authResult
   const resolvedBatchId = batchId.trim()
-  if (!resolvedBatchId) return notFound('MutationBatch')
-
-  const batch = await prisma.mutationBatch.findUnique({
-    where: { id: resolvedBatchId },
-    select: { id: true, projectId: true, userId: true, status: true },
-  })
-  if (!batch) return notFound('MutationBatch')
-  if (batch.userId !== session.user.id) return forbidden('Forbidden')
+  if (!resolvedBatchId) {
+    throw new ApiError('INVALID_PARAMS', {
+      code: 'MUTATION_BATCH_ID_REQUIRED',
+      field: 'batchId',
+      message: 'batchId is required',
+    })
+  }
 
   const result = await executeProjectAgentOperationFromApi({
-    request: _request,
-    operationId: 'revert_mutation_batch',
-    projectId: batch.projectId,
+    request,
+    operationId: 'revert_mutation_batch_by_id',
+    projectId: 'system',
     userId: session.user.id,
     input: {
-      batchId: batch.id,
+      batchId: resolvedBatchId,
     },
     source: 'project-ui/api',
   })

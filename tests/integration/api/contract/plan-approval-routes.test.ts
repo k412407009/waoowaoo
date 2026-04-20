@@ -5,12 +5,6 @@ const authState = vi.hoisted(() => ({
   authenticated: true,
 }))
 
-const prismaMock = vi.hoisted(() => ({
-  executionPlan: {
-    findUnique: vi.fn(),
-  },
-}))
-
 const apiAdapterMock = vi.hoisted(() => ({
   executeProjectAgentOperationFromApi: vi.fn(),
 }))
@@ -33,10 +27,6 @@ vi.mock('@/lib/api-auth', () => {
   }
 })
 
-vi.mock('@/lib/prisma', () => ({
-  prisma: prismaMock,
-}))
-
 vi.mock('@/lib/adapters/api/execute-project-agent-operation', () => apiAdapterMock)
 
 import { POST as approvePost } from '@/app/api/projects/[projectId]/plans/[planId]/approve/route'
@@ -48,15 +38,7 @@ describe('api contract - plan approval routes (operation adapter)', () => {
     vi.clearAllMocks()
   })
 
-  it('POST /projects/[projectId]/plans/[planId]/approve -> resolves workflowId and calls approve_plan operation', async () => {
-    prismaMock.executionPlan.findUnique.mockResolvedValueOnce({
-      id: 'plan-1',
-      projectId: 'project-1',
-      command: {
-        normalizedInput: { workflowId: 'story-to-script' },
-        rawInput: {},
-      },
-    })
+  it('POST /projects/[projectId]/plans/[planId]/approve -> calls approve_plan operation', async () => {
     apiAdapterMock.executeProjectAgentOperationFromApi.mockResolvedValueOnce({
       commandId: 'command-1',
       planId: 'plan-1',
@@ -83,7 +65,6 @@ describe('api contract - plan approval routes (operation adapter)', () => {
       userId: 'user-1',
       input: {
         planId: 'plan-1',
-        workflowId: 'story-to-script',
       },
     }))
 
@@ -98,10 +79,6 @@ describe('api contract - plan approval routes (operation adapter)', () => {
   })
 
   it('POST /projects/[projectId]/plans/[planId]/reject -> calls reject_plan operation with note', async () => {
-    prismaMock.executionPlan.findUnique.mockResolvedValueOnce({
-      id: 'plan-1',
-      projectId: 'project-1',
-    })
     apiAdapterMock.executeProjectAgentOperationFromApi.mockResolvedValueOnce({
       commandId: 'command-1',
       planId: 'plan-1',
@@ -133,4 +110,3 @@ describe('api contract - plan approval routes (operation adapter)', () => {
     }))
   })
 })
-

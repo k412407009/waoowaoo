@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuth } from '@/lib/api-auth'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
-import { prisma } from '@/lib/prisma'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -15,17 +14,6 @@ export const POST = apiHandler(async (
   const resolvedPlanId = planId.trim()
   if (!resolvedPlanId) {
     throw new ApiError('INVALID_PARAMS', { field: 'planId', message: 'planId is required' })
-  }
-
-  const plan = await prisma.executionPlan.findUnique({
-    where: { id: resolvedPlanId },
-    select: { id: true, projectId: true },
-  })
-  if (!plan) {
-    throw new ApiError('NOT_FOUND', { message: 'plan not found' })
-  }
-  if (plan.projectId !== projectId) {
-    throw new ApiError('FORBIDDEN', { message: 'plan project mismatch' })
   }
 
   let body: unknown = {}

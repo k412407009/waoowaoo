@@ -5,7 +5,6 @@ import { logInfo as _ulogInfo } from '@/lib/logging/core'
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { logUserAction } from '@/lib/logging/semantic'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
@@ -36,17 +35,9 @@ export const POST = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    // 验证项目存在
-    const project = await prisma.project.findUnique({
-        where: { id: projectId },
-        select: { id: true, name: true }
-    })
-
-    if (!project) {
-        throw new ApiError('NOT_FOUND')
-    }
-
-    const projectName = project.name || projectId
+    const projectName = typeof authResult.project.name === 'string' && authResult.project.name.trim()
+        ? authResult.project.name.trim()
+        : projectId
 
     const result = await executeProjectAgentOperationFromApi({
         request,

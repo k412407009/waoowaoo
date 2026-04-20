@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
@@ -24,23 +23,16 @@ export const GET = apiHandler(async (
         throw new ApiError('INVALID_PARAMS')
     }
 
-    // 查找编辑器项目
-    const editorProject = await prisma.videoEditorProject.findUnique({
-        where: { episodeId }
+    const result = await executeProjectAgentOperationFromApi({
+        request,
+        operationId: 'get_video_editor_project',
+        projectId,
+        userId: authResult.session.user.id,
+        input: { episodeId },
+        source: 'project-ui',
     })
 
-    if (!editorProject) {
-        return NextResponse.json({ projectData: null }, { status: 200 })
-    }
-
-    return NextResponse.json({
-        id: editorProject.id,
-        episodeId: editorProject.episodeId,
-        projectData: JSON.parse(editorProject.projectData),
-        renderStatus: editorProject.renderStatus,
-        outputUrl: editorProject.outputUrl,
-        updatedAt: editorProject.updatedAt
-    })
+    return NextResponse.json(result)
 })
 
 /**

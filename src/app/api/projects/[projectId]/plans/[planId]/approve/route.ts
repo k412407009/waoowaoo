@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiHandler, ApiError } from '@/lib/api-errors'
 import { isErrorResponse, requireProjectAuth } from '@/lib/api-auth'
-import { prisma } from '@/lib/prisma'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
-import { resolveWorkflowPackageIdFromCommandInput } from '@/lib/command-center/workflow-id'
 
 export const POST = apiHandler(async (
   request: NextRequest,
@@ -18,35 +16,6 @@ export const POST = apiHandler(async (
     throw new ApiError('INVALID_PARAMS', { field: 'planId', message: 'planId is required' })
   }
 
-  const plan = await prisma.executionPlan.findUnique({
-    where: { id: resolvedPlanId },
-    select: {
-      id: true,
-      projectId: true,
-      command: {
-        select: {
-          normalizedInput: true,
-          rawInput: true,
-        },
-      },
-    },
-  })
-  if (!plan) {
-    throw new ApiError('NOT_FOUND', { message: 'plan not found' })
-  }
-  if (plan.projectId !== projectId) {
-    throw new ApiError('FORBIDDEN', { message: 'plan project mismatch' })
-  }
-
-  const workflowId = resolveWorkflowPackageIdFromCommandInput(plan.command.normalizedInput)
-    || resolveWorkflowPackageIdFromCommandInput(plan.command.rawInput)
-  if (!workflowId) {
-    throw new ApiError('EXTERNAL_ERROR', {
-      code: 'WORKFLOW_ID_NOT_FOUND',
-      message: 'workflowId is missing in command input',
-    })
-  }
-
   const raw = await executeProjectAgentOperationFromApi({
     request,
     operationId: 'approve_plan',
@@ -54,7 +23,6 @@ export const POST = apiHandler(async (
     userId: authResult.session.user.id,
     input: {
       planId: resolvedPlanId,
-      workflowId,
     },
     source: 'project-ui/api',
   })

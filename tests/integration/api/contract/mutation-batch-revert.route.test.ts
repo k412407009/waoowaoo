@@ -5,12 +5,6 @@ const authState = vi.hoisted(() => ({
   authenticated: true,
 }))
 
-const prismaMock = vi.hoisted(() => ({
-  mutationBatch: {
-    findUnique: vi.fn(),
-  },
-}))
-
 const apiAdapterMock = vi.hoisted(() => ({
   executeProjectAgentOperationFromApi: vi.fn(),
 }))
@@ -22,18 +16,13 @@ vi.mock('@/lib/api-auth', () => {
   )
 
   return {
+    isErrorResponse: (value: unknown) => value instanceof Response,
     requireUserAuth: async () => {
       if (!authState.authenticated) return unauthorized()
       return { session: { user: { id: 'user-1' } } }
     },
-    forbidden: () => new Response(JSON.stringify({ error: { code: 'FORBIDDEN' } }), { status: 403 }),
-    notFound: () => new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 }),
   }
 })
-
-vi.mock('@/lib/prisma', () => ({
-  prisma: prismaMock,
-}))
 
 vi.mock('@/lib/adapters/api/execute-project-agent-operation', () => apiAdapterMock)
 
@@ -45,13 +34,7 @@ describe('api contract - mutation batch revert route (operation adapter)', () =>
     vi.clearAllMocks()
   })
 
-  it('POST /mutation-batches/[batchId]/revert -> calls revert_mutation_batch operation', async () => {
-    prismaMock.mutationBatch.findUnique.mockResolvedValueOnce({
-      id: 'batch-1',
-      projectId: 'project-1',
-      userId: 'user-1',
-      status: 'active',
-    })
+  it('POST /mutation-batches/[batchId]/revert -> calls revert_mutation_batch_by_id operation', async () => {
     apiAdapterMock.executeProjectAgentOperationFromApi.mockResolvedValueOnce({
       ok: true,
       reverted: 3,
@@ -67,12 +50,11 @@ describe('api contract - mutation batch revert route (operation adapter)', () =>
 
     expect(res.status).toBe(200)
     expect(apiAdapterMock.executeProjectAgentOperationFromApi).toHaveBeenCalledWith(expect.objectContaining({
-      operationId: 'revert_mutation_batch',
-      projectId: 'project-1',
+      operationId: 'revert_mutation_batch_by_id',
+      projectId: 'system',
       userId: 'user-1',
       input: { batchId: 'batch-1' },
     }))
     await expect(res.json()).resolves.toEqual({ ok: true, reverted: 3 })
   })
 })
-

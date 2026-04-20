@@ -1,77 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { requireProjectAuthLight, isErrorResponse } from '@/lib/api-auth'
 import { apiHandler, ApiError } from '@/lib/api-errors'
-import { resolveMediaRef } from '@/lib/media/service'
 import { executeProjectAgentOperationFromApi } from '@/lib/adapters/api/execute-project-agent-operation'
-
-async function resolveMatchedPanelData(
-  matchedPanelId: string | null | undefined,
-  expectedEpisodeId?: string
-) {
-  if (matchedPanelId === undefined) {
-    return null
-  }
-
-  if (matchedPanelId === null) {
-    return {
-      matchedPanelId: null,
-      matchedStoryboardId: null,
-      matchedPanelIndex: null
-    }
-  }
-
-  const panel = await prisma.projectPanel.findUnique({
-    where: { id: matchedPanelId },
-    select: {
-      id: true,
-      storyboardId: true,
-      panelIndex: true,
-      storyboard: {
-        select: {
-          episodeId: true
-        }
-      }
-    }
-  })
-
-  if (!panel) {
-    throw new ApiError('NOT_FOUND')
-  }
-  if (expectedEpisodeId && panel.storyboard.episodeId !== expectedEpisodeId) {
-    throw new ApiError('INVALID_PARAMS')
-  }
-
-  return {
-    matchedPanelId: panel.id,
-    matchedStoryboardId: panel.storyboardId,
-    matchedPanelIndex: panel.panelIndex
-  }
-}
-
-async function withVoiceLineMedia<T extends Record<string, unknown>>(line: T) {
-  const audioMedia = await resolveMediaRef(line.audioMediaId, line.audioUrl)
-  const matchedPanel = line.matchedPanel as
-    | {
-      storyboardId?: string | null
-      panelIndex?: number | null
-    }
-    | null
-    | undefined
-  return {
-    ...line,
-    media: audioMedia,
-    audioMedia,
-    audioUrl: audioMedia?.url || line.audioUrl || null,
-    updatedAt:
-      line.updatedAt instanceof Date
-        ? line.updatedAt.toISOString()
-        : typeof line.updatedAt === 'string'
-          ? line.updatedAt
-          : null,
-    matchedStoryboardId: matchedPanel?.storyboardId ?? line.matchedStoryboardId,
-    matchedPanelIndex: matchedPanel?.panelIndex ?? line.matchedPanelIndex}
-}
 
 /**
  * GET /api/projects/[projectId]/voice-lines?episodeId=xxx
@@ -92,63 +22,32 @@ export const GET = apiHandler(async (
   const speakersOnly = searchParams.get('speakersOnly')
 
   if (speakersOnly === '1') {
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-      select: { id: true }
-    })
-    if (!project) {
-      throw new ApiError('NOT_FOUND')
-    }
-
-    const speakerRows = await prisma.projectVoiceLine.findMany({
-      where: {
-        episode: {
-          projectId
-        }
-      },
-      select: { speaker: true },
-      distinct: ['speaker'],
-      orderBy: { speaker: 'asc' }
+    const result = await executeProjectAgentOperationFromApi({
+      request,
+      operationId: 'list_voice_line_speakers',
+      projectId,
+      userId: authResult.session.user.id,
+      input: {},
+      source: 'project-ui',
     })
 
-    return NextResponse.json({
-      speakers: speakerRows.map(item => item.speaker).filter(Boolean)
-    })
+    return NextResponse.json(result)
   }
 
   if (!episodeId) {
     throw new ApiError('INVALID_PARAMS')
   }
 
-  // 获取台词列表（包含匹配的 Panel 信息）
-  const voiceLines = await prisma.projectVoiceLine.findMany({
-    where: { episodeId },
-    orderBy: { lineIndex: 'asc' },
-    include: {
-      matchedPanel: {
-        select: {
-          id: true,
-          storyboardId: true,
-          panelIndex: true
-        }
-      }
-    }
+  const result = await executeProjectAgentOperationFromApi({
+    request,
+    operationId: 'list_voice_lines',
+    projectId,
+    userId: authResult.session.user.id,
+    input: { episodeId },
+    source: 'project-ui',
   })
 
-  // 转换为稳定媒体 URL，并添加兼容字段
-  const voiceLinesWithUrls = await Promise.all(voiceLines.map(withVoiceLineMedia))
-
-  // 统计发言人
-  const speakerStats: Record<string, number> = {}
-  for (const line of voiceLines) {
-    speakerStats[line.speaker] = (speakerStats[line.speaker] || 0) + 1
-  }
-
-  return NextResponse.json({
-    voiceLines: voiceLinesWithUrls,
-    count: voiceLines.length,
-    speakerStats
-  })
+  return NextResponse.json(result)
 })
 
 /**
