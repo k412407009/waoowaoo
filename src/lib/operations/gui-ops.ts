@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { createHash } from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { ApiError } from '@/lib/api-errors'
+import { logError } from '@/lib/logging/core'
 import { getProviderKey, resolveModelSelectionOrSingle } from '@/lib/api-config'
 import { getProjectModelConfig, getUserModelConfig } from '@/lib/config-service'
 import { resolveTaskLocale, resolveRequiredTaskLocale } from '@/lib/task/resolve-locale'
@@ -830,6 +831,47 @@ export function createGuiOperations(): ProjectAgentOperationRegistry {
         return { success: true, clip: updated }
       },
     },
+    get_video_editor_project: {
+      id: 'get_video_editor_project',
+      description: 'Get video editor project data for an episode.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'episode',
+      inputSchema: z.object({
+        episodeId: z.string().min(1),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const episode = await prisma.projectEpisode.findFirst({
+          where: { id: input.episodeId, projectId: ctx.projectId },
+          select: { id: true },
+        })
+        if (!episode) throw new ApiError('NOT_FOUND')
+
+        const editorProject = await prisma.videoEditorProject.findUnique({
+          where: { episodeId: input.episodeId },
+        })
+
+        if (!editorProject) {
+          return { projectData: null }
+        }
+
+        let parsedProjectData: unknown
+        try {
+          parsedProjectData = JSON.parse(editorProject.projectData)
+        } catch {
+          throw new Error('VIDEO_EDITOR_PROJECT_DATA_INVALID')
+        }
+
+        return {
+          id: editorProject.id,
+          episodeId: editorProject.episodeId,
+          projectData: parsedProjectData,
+          renderStatus: editorProject.renderStatus,
+          outputUrl: editorProject.outputUrl,
+          updatedAt: editorProject.updatedAt,
+        }
+      },
+    },
     save_video_editor_project: {
       id: 'save_video_editor_project',
       description: 'Upsert video editor project data for an episode.',
@@ -904,6 +946,36 @@ export function createGuiOperations(): ProjectAgentOperationRegistry {
           data: { lastError: null },
         })
         return { success: true }
+      },
+    },
+    list_storyboards: {
+      id: 'list_storyboards',
+      description: 'List storyboards (clip + panels) for an episode.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'episode',
+      inputSchema: z.object({
+        episodeId: z.string().min(1),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const episode = await prisma.projectEpisode.findFirst({
+          where: { id: input.episodeId, projectId: ctx.projectId },
+          select: { id: true },
+        })
+        if (!episode) throw new ApiError('NOT_FOUND')
+
+        const storyboards = await prisma.projectStoryboard.findMany({
+          where: { episodeId: input.episodeId },
+          include: {
+            clip: true,
+            panels: { orderBy: { panelIndex: 'asc' } },
+          },
+          orderBy: { createdAt: 'asc' },
+        })
+
+        const withMedia = await attachMediaFieldsToProject({ storyboards })
+        const processedStoryboards = withMedia.storyboards || storyboards
+        return { storyboards: processedStoryboards }
       },
     },
     create_storyboard_group: {
@@ -1137,6 +1209,78 @@ export function createGuiOperations(): ProjectAgentOperationRegistry {
         return { success: true, voiceLine: await withVoiceLineMedia(created as unknown as Record<string, unknown>) }
       },
     },
+    list_voice_line_speakers: {
+      id: 'list_voice_line_speakers',
+      description: 'List distinct speakers that appear in voice lines for this project.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({}).passthrough(),
+      outputSchema: z.unknown(),
+      execute: async (ctx) => {
+        const project = await prisma.project.findUnique({
+          where: { id: ctx.projectId },
+          select: { id: true },
+        })
+        if (!project) throw new ApiError('NOT_FOUND')
+
+        const speakerRows = await prisma.projectVoiceLine.findMany({
+          where: {
+            episode: { projectId: ctx.projectId },
+          },
+          select: { speaker: true },
+          distinct: ['speaker'],
+          orderBy: { speaker: 'asc' },
+        })
+
+        return {
+          speakers: speakerRows.map((item) => item.speaker).filter(Boolean),
+        }
+      },
+    },
+    list_voice_lines: {
+      id: 'list_voice_lines',
+      description: 'List voice lines for an episode including matched panel info and normalized media fields.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'episode',
+      inputSchema: z.object({
+        episodeId: z.string().min(1),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const episode = await prisma.projectEpisode.findFirst({
+          where: { id: input.episodeId, projectId: ctx.projectId },
+          select: { id: true },
+        })
+        if (!episode) throw new ApiError('NOT_FOUND')
+
+        const voiceLines = await prisma.projectVoiceLine.findMany({
+          where: { episodeId: input.episodeId },
+          orderBy: { lineIndex: 'asc' },
+          include: {
+            matchedPanel: {
+              select: {
+                id: true,
+                storyboardId: true,
+                panelIndex: true,
+              },
+            },
+          },
+        })
+
+        const voiceLinesWithUrls = await Promise.all(voiceLines.map(withVoiceLineMedia))
+
+        const speakerStats: Record<string, number> = {}
+        for (const line of voiceLines) {
+          speakerStats[line.speaker] = (speakerStats[line.speaker] || 0) + 1
+        }
+
+        return {
+          voiceLines: voiceLinesWithUrls,
+          count: voiceLines.length,
+          speakerStats,
+        }
+      },
+    },
     update_voice_line: {
       id: 'update_voice_line',
       description: 'Update a voice line fields including media refs and matched panel mapping.',
@@ -1313,6 +1457,49 @@ export function createGuiOperations(): ProjectAgentOperationRegistry {
         return { success: true }
       },
     },
+    get_speaker_voices: {
+      id: 'get_speaker_voices',
+      description: 'Get speaker voice map for an episode with signed preview urls.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'episode',
+      inputSchema: z.object({
+        episodeId: z.string().min(1),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const episode = await prisma.projectEpisode.findFirst({
+          where: { id: input.episodeId, projectId: ctx.projectId },
+          select: { id: true, speakerVoices: true },
+        })
+        if (!episode) throw new ApiError('NOT_FOUND')
+
+        const storedSpeakerVoices = parseSpeakerVoiceMap(episode.speakerVoices)
+        const speakerVoices: SpeakerVoiceMap = {}
+
+        const signUrlIfNeeded = (url: string) => (url.startsWith('http') ? url : getSignedUrl(url, 7200))
+
+        for (const [speaker, voice] of Object.entries(storedSpeakerVoices)) {
+          if (voice.provider === 'fal') {
+            speakerVoices[speaker] = {
+              provider: 'fal',
+              voiceType: voice.voiceType,
+              audioUrl: signUrlIfNeeded(voice.audioUrl),
+            }
+            continue
+          }
+
+          const previewAudioUrl = voice.previewAudioUrl ? signUrlIfNeeded(voice.previewAudioUrl) : undefined
+          speakerVoices[speaker] = {
+            provider: 'bailian',
+            voiceType: voice.voiceType,
+            voiceId: voice.voiceId,
+            ...(previewAudioUrl ? { previewAudioUrl } : {}),
+          }
+        }
+
+        return { speakerVoices }
+      },
+    },
     create_episode: {
       id: 'create_episode',
       description: 'Create a new episode in a project and update lastEpisodeId.',
@@ -1353,6 +1540,58 @@ export function createGuiOperations(): ProjectAgentOperationRegistry {
           data: { lastEpisodeId: episode.id },
         })
         return { episode }
+      },
+    },
+    list_episodes: {
+      id: 'list_episodes',
+      description: 'List episodes for a project ordered by episodeNumber.',
+      sideEffects: { mode: 'query', risk: 'low' },
+      scope: 'project',
+      inputSchema: z.object({}).passthrough(),
+      outputSchema: z.unknown(),
+      execute: async (ctx) => {
+        const episodes = await prisma.projectEpisode.findMany({
+          where: { projectId: ctx.projectId },
+          orderBy: { episodeNumber: 'asc' },
+        })
+
+        return { episodes }
+      },
+    },
+    get_episode_detail: {
+      id: 'get_episode_detail',
+      description: 'Get full episode data with storyboards/clips/shots/voice lines and update project.lastEpisodeId.',
+      sideEffects: { mode: 'act', risk: 'low', overwrite: true },
+      scope: 'episode',
+      inputSchema: z.object({
+        episodeId: z.string().min(1),
+      }),
+      outputSchema: z.unknown(),
+      execute: async (ctx, input) => {
+        const episode = await prisma.projectEpisode.findFirst({
+          where: { id: input.episodeId, projectId: ctx.projectId },
+          include: {
+            clips: { orderBy: { createdAt: 'asc' } },
+            storyboards: {
+              include: {
+                clip: true,
+                panels: { orderBy: { panelIndex: 'asc' } },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+            shots: { orderBy: { shotId: 'asc' } },
+            voiceLines: { orderBy: { lineIndex: 'asc' } },
+          },
+        })
+        if (!episode) throw new ApiError('NOT_FOUND')
+
+        prisma.project.update({
+          where: { id: ctx.projectId },
+          data: { lastEpisodeId: input.episodeId },
+        }).catch((error: unknown) => logError('update lastEpisodeId failed', error))
+
+        const episodeWithSignedUrls = await attachMediaFieldsToProject(episode)
+        return { episode: episodeWithSignedUrls }
       },
     },
     update_episode: {

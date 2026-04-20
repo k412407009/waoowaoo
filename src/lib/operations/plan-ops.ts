@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { executeProjectCommand, approveProjectPlan, rejectProjectPlan } from '@/lib/command-center/executor'
+import { resolveWorkflowPackageIdFromCommandInput } from '@/lib/command-center/workflow-id'
 import {
   getSavedSkill,
   saveWorkflowPlanTemplateFromExecutionPlan,
@@ -20,6 +21,8 @@ import type {
   WorkflowPlanPartData,
   WorkflowStatusPartData,
 } from '@/lib/project-agent/types'
+import { ApiError } from '@/lib/api-errors'
+import { prisma } from '@/lib/prisma'
 import type { ProjectAgentOperationRegistry } from './types'
 import { writeOperationDataPart } from './types'
 
@@ -262,18 +265,48 @@ export function createPlanOperations(): ProjectAgentOperationRegistry {
       scope: 'plan',
       inputSchema: z.object({
         planId: z.string().min(1),
-        workflowId: z.enum(['story-to-script', 'script-to-storyboard']),
+        workflowId: z.enum(['story-to-script', 'script-to-storyboard']).optional(),
         confirmed: z.boolean().optional(),
       }),
       outputSchema: z.unknown(),
       execute: async (ctx, input) => {
+        const plan = await prisma.executionPlan.findUnique({
+          where: { id: input.planId },
+          select: {
+            id: true,
+            projectId: true,
+            command: {
+              select: {
+                normalizedInput: true,
+                rawInput: true,
+              },
+            },
+          },
+        })
+        if (!plan) {
+          throw new ApiError('NOT_FOUND', { message: 'plan not found' })
+        }
+        if (plan.projectId !== ctx.projectId) {
+          throw new ApiError('FORBIDDEN', { message: 'plan project mismatch' })
+        }
+
+        const workflowId = input.workflowId
+          || resolveWorkflowPackageIdFromCommandInput(plan.command.normalizedInput)
+          || resolveWorkflowPackageIdFromCommandInput(plan.command.rawInput)
+        if (!workflowId) {
+          throw new ApiError('EXTERNAL_ERROR', {
+            code: 'WORKFLOW_ID_NOT_FOUND',
+            message: 'workflowId is missing in command input',
+          })
+        }
+
         const result = await approveProjectPlan({
           request: ctx.request,
           userId: ctx.userId,
           planId: input.planId,
         })
         writeOperationDataPart<WorkflowStatusPartData>(ctx.writer, 'data-workflow-status', {
-          workflowId: input.workflowId,
+          workflowId,
           commandId: result.commandId,
           planId: result.planId,
           runId: result.linkedRunId,
@@ -300,10 +333,23 @@ export function createPlanOperations(): ProjectAgentOperationRegistry {
         note: z.string().optional(),
       }),
       outputSchema: z.unknown(),
-      execute: async (_, input) => rejectProjectPlan({
-        planId: input.planId,
-        note: input.note,
-      }),
+      execute: async (ctx, input) => {
+        const plan = await prisma.executionPlan.findUnique({
+          where: { id: input.planId },
+          select: { id: true, projectId: true },
+        })
+        if (!plan) {
+          throw new ApiError('NOT_FOUND', { message: 'plan not found' })
+        }
+        if (plan.projectId !== ctx.projectId) {
+          throw new ApiError('FORBIDDEN', { message: 'plan project mismatch' })
+        }
+
+        return await rejectProjectPlan({
+          planId: input.planId,
+          note: input.note,
+        })
+      },
     },
   }
 }

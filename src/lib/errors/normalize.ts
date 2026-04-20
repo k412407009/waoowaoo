@@ -21,7 +21,9 @@ function toMessage(value: unknown): string {
   if (typeof value === 'string' && value.trim()) return value.trim()
   if (value instanceof Error && value.message.trim()) return value.message.trim()
   try {
-    return JSON.stringify(value)
+    const serialized = JSON.stringify(value)
+    if (typeof serialized === 'string') return serialized
+    return ''
   } catch {
     return ''
   }

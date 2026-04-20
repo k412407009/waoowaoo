@@ -23,7 +23,16 @@ import { createAssetHubLlmOperations } from './asset-hub-llm-ops'
 import { createAssetHubVoiceOperations } from './asset-hub-voice-ops'
 import { createAssetHubFolderOperations } from './asset-hub-folder-ops'
 import { createAssetHubVoiceLibraryOperations } from './asset-hub-voice-library-ops'
+import { createAssetHubVoiceUploadOperations } from './asset-hub-voice-upload-ops'
+import { createAssetHubCharacterLibraryOperations } from './asset-hub-character-library-ops'
+import { createAssetHubCharacterAppearanceOperations } from './asset-hub-character-appearance-ops'
+import { createAssetHubLocationLibraryOperations } from './asset-hub-location-library-ops'
 import { createAssetHubPickerOperations } from './asset-hub-picker-ops'
+import { createUserPreferenceOperations } from './user-preference-ops'
+import { createUserModelsOperations } from './user-models-ops'
+import { createUserBillingOperations } from './user-billing-ops'
+import { createUserApiConfigOperations } from './user-api-config-ops'
+import { createAuthOperations } from './auth-ops'
 import { createHash, randomUUID } from 'crypto'
 import { ApiError, getRequestId } from '@/lib/api-errors'
 import { submitTask } from '@/lib/task/submitter'
@@ -359,10 +368,19 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
     ...createTaskOperations(),
     ...createSseOperations(),
     ...createHomeLlmOperations(),
+    ...createAuthOperations(),
+    ...createUserPreferenceOperations(),
+    ...createUserModelsOperations(),
+    ...createUserBillingOperations(),
+    ...createUserApiConfigOperations(),
     ...createAssetHubLlmOperations(),
     ...createAssetHubVoiceOperations(),
     ...createAssetHubFolderOperations(),
     ...createAssetHubVoiceLibraryOperations(),
+    ...createAssetHubVoiceUploadOperations(),
+    ...createAssetHubCharacterLibraryOperations(),
+    ...createAssetHubCharacterAppearanceOperations(),
+    ...createAssetHubLocationLibraryOperations(),
     ...createAssetHubPickerOperations(),
     ...createReadOperations(),
     ...createProjectCrudOperations(),
@@ -1035,7 +1053,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
           'delete_panel',
           'update_panel_fields',
         ]),
-        storyboardId: z.string().min(1),
+        storyboardId: z.string().min(1).optional(),
         insertAfterPanelId: z.string().min(1).optional(),
         panelId: z.string().min(1).optional(),
         panelIndex: z.number().int().min(0).max(2000).optional(),
@@ -1063,7 +1081,7 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
       outputSchema: z.unknown(),
       execute: async (ctx, input) => {
         const locale = resolveLocaleFromContext(ctx.context.locale)
-        const storyboardId = input.storyboardId.trim()
+        let storyboardId = normalizeString(input.storyboardId)
 
         if (input.action === 'select_panel_candidate' || input.action === 'cancel_panel_candidates') {
           const panelId = normalizeString(input.panelId)
@@ -1194,6 +1212,31 @@ export function createProjectAgentOperationRegistry(): ProjectAgentOperationRegi
             cosKey: finalImageKey,
             mutationBatchId: mutationBatch.id,
           }
+        }
+
+        if (!storyboardId && (input.action === 'delete_panel' || input.action === 'update_panel_prompt')) {
+          const panelId = normalizeString(input.panelId)
+          if (panelId) {
+            const panel = await prisma.projectPanel.findFirst({
+              where: {
+                id: panelId,
+                storyboard: {
+                  episode: {
+                    projectId: ctx.projectId,
+                  },
+                },
+              },
+              select: { storyboardId: true },
+            })
+            if (!panel) {
+              throw new Error('PROJECT_AGENT_PANEL_NOT_FOUND')
+            }
+            storyboardId = panel.storyboardId
+          }
+        }
+
+        if (!storyboardId) {
+          throw new Error('PROJECT_AGENT_STORYBOARD_REQUIRED')
         }
 
         const storyboard = await prisma.projectStoryboard.findFirst({
