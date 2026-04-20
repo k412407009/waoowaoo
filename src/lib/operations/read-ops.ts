@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { queryTaskTargetStates } from '@/lib/task/state-service'
+import { withPrismaRetry } from '@/lib/prisma-retry'
 import { assembleProjectContext } from '@/lib/project-context/assembler'
 import { listProjectCommands, syncProjectCommandStatus } from '@/lib/command-center/executor'
 import { listSkillCatalogEntries, listWorkflowPackages, readSkillCatalogDocument } from '@/lib/skill-system/catalog'
@@ -216,15 +217,17 @@ export function createReadOperations(): ProjectAgentOperationRegistry {
       sideEffects: { mode: 'query', risk: 'none' },
       scope: 'project',
       inputSchema: z.object({
-        targets: z.array(taskTargetSchema).min(1).max(50),
+        targets: z.array(taskTargetSchema).min(1).max(500),
       }),
       outputSchema: z.unknown(),
       execute: async (ctx, input) => ({
-        states: await queryTaskTargetStates({
-          projectId: ctx.projectId,
-          userId: ctx.userId,
-          targets: input.targets,
-        }),
+        states: await withPrismaRetry(() =>
+          queryTaskTargetStates({
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            targets: input.targets,
+          })
+        ),
       }),
     },
     list_recent_commands: {
