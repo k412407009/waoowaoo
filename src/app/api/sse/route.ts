@@ -18,6 +18,19 @@ function formatHeartbeat() {
   return `event: heartbeat\ndata: {"ts":"${new Date().toISOString()}"}\n\n`
 }
 
+function isSSEEventLike(value: unknown): value is SSEEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return (
+    typeof record.id === 'string'
+    && typeof record.type === 'string'
+    && typeof record.taskId === 'string'
+    && typeof record.projectId === 'string'
+    && typeof record.userId === 'string'
+    && typeof record.ts === 'string'
+  )
+}
+
 export const GET = apiHandler(async (request: NextRequest) => {
   const projectId = request.nextUrl.searchParams.get('projectId')
   const episodeId = request.nextUrl.searchParams.get('episodeId')
@@ -123,8 +136,24 @@ export const GET = apiHandler(async (request: NextRequest) => {
 
       unsubscribe = await sharedSubscriber.addChannelListener(channel, (message) => {
         try {
-          const event = JSON.parse(message) as SSEEvent
-          safeEnqueue(formatSSE(event))
+          const payload = JSON.parse(message) as unknown
+          if (!isSSEEventLike(payload)) {
+            logger.error({
+              action: 'sse.message.invalid',
+              message: 'invalid sse message payload',
+              details: { message },
+            })
+            return
+          }
+          if (payload.userId !== session.user.id) {
+            logger.error({
+              action: 'sse.message.user_mismatch',
+              message: 'sse message userId mismatch',
+              details: { eventUserId: payload.userId, sessionUserId: session.user.id },
+            })
+            return
+          }
+          safeEnqueue(formatSSE(payload))
         } catch {
           logger.error({
             action: 'sse.message.invalid',

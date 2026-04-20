@@ -197,6 +197,19 @@ describe('api contract - task run routes (behavior)', () => {
     expect(listener).toBeTruthy()
 
     listener!(JSON.stringify({
+      id: '10',
+      type: 'task.lifecycle',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      userId: 'user-2',
+      ts: new Date().toISOString(),
+      taskType: 'IMAGE_CHARACTER',
+      targetType: 'CharacterAppearance',
+      targetId: 'appearance-1',
+      episodeId: null,
+      payload: { lifecycleType: 'processing', progress: 10 },
+    }))
+    listener!(JSON.stringify({
       id: '11',
       type: 'task.lifecycle',
       taskId: 'task-1',
@@ -229,6 +242,7 @@ describe('api contract - task run routes (behavior)', () => {
     const chunk2 = await reader!.read()
     const merged = `${new TextDecoder().decode(chunk1.value)}${new TextDecoder().decode(chunk2.value)}`
 
+    expect(merged).not.toContain('"userId":"user-2"')
     expect(merged).toContain('"lifecycleType":"processing"')
     expect(merged).toContain('"lifecycleType":"completed"')
     await reader!.cancel()
