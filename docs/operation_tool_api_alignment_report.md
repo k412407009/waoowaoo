@@ -6,6 +6,17 @@
 
 ---
 
+## UPDATE（2026-04-20）
+
+本报告的原始统计数据已过期：后续已完成大规模迁移，使 **API route 不再直连 prisma**，并尽可能统一为 **route → operation adapter → operation.execute** 的单一路径。
+
+本次迁移后新增/调整点（摘要）：
+- API route：`src/app/api/**` 已消除 `prisma.*` 旁路（通过迁移到 operation 或抽离到可复用 service 后由 operation 调用）。
+- Project 读入口补齐：storyboards/panel/voice-lines/editor/episodes/speaker-voice 的读写语义以 operation 为权威。
+- User/Auth 侧（preferences/models/billing/api-config/register）补齐系统级 operations，并将 route 改为薄封装调用 operation。
+
+建议把下方“原审计内容”视为历史交接材料；当前状态以代码扫描结果为准（见本仓库 `docs/agent_delivery_progress.md` 的最新迁移记录）。
+
 ## 1. Summary（结论）
 
 **结论：部分对齐（Project Agent 体系内对齐较好，但全仓库层面未达标）。**
@@ -501,4 +512,3 @@ Operation registry 来源：
 
 5) **增加自动化 guard（防回归）**
    - 新增或扩展脚本守卫：扫描所有 `POST/PUT/PATCH/DELETE` 的 `src/app/api/**/route.ts`，若属于“人工可编辑动作”域且未调用 operation adapter，则 CI 失败（允许白名单，如 auth/register）。
-

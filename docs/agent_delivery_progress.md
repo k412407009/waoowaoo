@@ -124,3 +124,62 @@
   - route 下沉：`src/app/api/projects/route.ts` `src/app/api/projects/[projectId]/route.ts` `src/app/api/projects/[projectId]/video-urls/route.ts` `src/app/api/projects/[projectId]/video-proxy/route.ts` `src/app/api/projects/[projectId]/download-images/route.ts` `src/app/api/projects/[projectId]/download-videos/route.ts` `src/app/api/projects/[projectId]/download-voices/route.ts`
   - 安全性修正：episodeId 查询强制带 projectId 约束；video-proxy 仅允许解析为 storageKey 后再签名下载（避免 SSRF）。
   - 测试覆盖点：`tests/integration/api/contract/projects.route.test.ts` `tests/integration/api/contract/project-basic.route.test.ts` `tests/integration/api/contract/project-video-routes.test.ts` `tests/integration/api/contract/project-download-routes.test.ts`
+
+- [x] P1/P2：Operation 覆盖与收口（runs/tasks/sse/asset-hub）
+  - 状态：done
+  - 涉及文件：
+    - operations：`src/lib/operations/run-ops.ts` `src/lib/operations/task-ops.ts` `src/lib/operations/sse-ops.ts`
+    - asset-hub：`src/lib/operations/asset-hub-llm-ops.ts` `src/lib/operations/asset-hub-voice-ops.ts` `src/lib/operations/asset-hub-folder-ops.ts` `src/lib/operations/asset-hub-voice-library-ops.ts` `src/lib/operations/asset-hub-picker-ops.ts`
+  - route 下沉：
+    - runs/tasks：`src/app/api/runs/**` `src/app/api/tasks/**`
+    - sse：`src/app/api/sse/route.ts`（bootstrap 下沉到 op；流式订阅留在 route）
+    - asset-hub：`src/app/api/asset-hub/**`（folders/voices/picker + llm task submit）
+  - 安全性修正：
+    - SSE replay 引入按 userId 过滤，避免跨用户事件回放混淆。
+  - 测试覆盖点：
+    - `tests/integration/api/contract/run-cancel.route.test.ts`
+    - `tests/integration/api/contract/run-step-retry.route.test.ts`
+    - `tests/integration/api/contract/runs-list.route.test.ts`
+    - 复用 `tests/integration/api/contract/direct-submit-*-routes.test.ts`
+  - 命令与结果摘要：
+    - `npm run typecheck` -> 通过
+    - `npm run test:behavior:api` -> 通过
+
+- [x] P1/P2：Operation 覆盖与收口（project 编辑入口：storyboards/panel/voice-lines/editor/episodes/speaker-voice）
+  - 状态：done
+  - 涉及文件：
+    - operations：`src/lib/operations/gui-ops.ts`（新增 query/read operations：`list_storyboards`/`list_voice_lines`/`list_voice_line_speakers`/`get_video_editor_project`/`list_episodes`/`get_episode_detail`/`get_speaker_voices`）
+    - operations：`src/lib/operations/plan-ops.ts`（approve/reject 补齐 projectId 校验 + workflowId 推导）
+    - operations：`src/lib/operations/project-agent.ts`（mutate_storyboard 支持 delete/update 通过 panelId 自动反查 storyboardId）
+  - route 下沉：
+    - `src/app/api/projects/[projectId]/storyboards/route.ts`
+    - `src/app/api/projects/[projectId]/panel/route.ts`
+    - `src/app/api/projects/[projectId]/panel/select-candidate/route.ts`
+    - `src/app/api/projects/[projectId]/voice-lines/route.ts`
+    - `src/app/api/projects/[projectId]/editor/route.ts`
+    - `src/app/api/projects/[projectId]/episodes/route.ts`
+    - `src/app/api/projects/[projectId]/episodes/[episodeId]/route.ts`
+    - `src/app/api/projects/[projectId]/episodes/split-by-markers/route.ts`
+    - `src/app/api/projects/[projectId]/speaker-voice/route.ts`
+    - `src/app/api/projects/[projectId]/plans/[planId]/approve/route.ts`
+    - `src/app/api/projects/[projectId]/plans/[planId]/reject/route.ts`
+  - 安全性修正：
+    - episode detail GET 从 `findUnique` 改为 op 内 `findFirst({ id, projectId })` 强制 projectId 约束，避免跨项目 episodeId 泄露。
+  - 测试覆盖点：
+    - `tests/integration/api/contract/plan-approval-routes.test.ts`（更新为 route 仅 thin-call，不再 mock prisma）
+    - 复用既有 `tests/integration/api/contract/project-crud-routes.test.ts` 等契约
+
+- [x] P1/P2：Operation 覆盖与收口（user/auth：preferences/models/billing/api-config/register）
+  - 状态：done
+  - 涉及文件：
+    - operations：`src/lib/operations/user-preference-ops.ts` `src/lib/operations/user-models-ops.ts` `src/lib/operations/user-billing-ops.ts` `src/lib/operations/user-api-config-ops.ts` `src/lib/operations/auth-ops.ts`
+    - 抽离：`src/lib/user-api/api-config.ts`（route 迁移为 thin wrapper，逻辑可被 operation 复用）
+  - route 下沉：
+    - `src/app/api/user-preference/route.ts`
+    - `src/app/api/user/models/route.ts`
+    - `src/app/api/user/costs/route.ts`
+    - `src/app/api/user/transactions/route.ts`
+    - `src/app/api/user/api-config/route.ts`
+    - `src/app/api/auth/register/route.ts`（保留 rate-limit 与审计日志；注册落地迁移到 operation）
+  - 说明：
+    - auth register 属于“无 session”入口，此处约定传 `projectId='system'` 且 `userId='anonymous'`（operation 内不依赖 ctx.userId）。

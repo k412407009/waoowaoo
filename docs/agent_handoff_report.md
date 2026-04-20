@@ -4,6 +4,15 @@
 
 ---
 
+## UPDATE（2026-04-20）
+
+本报告生成后，已推进“API / Operation / Tool 对齐”关键迁移：
+- `src/app/api/**` routes 已去除 `prisma.*` 旁路，写入口优先走 `executeProjectAgentOperationFromApi`。
+- 补齐了若干缺失的 query/read operations（例如 storyboards、voice-lines、episodes、speaker-voice、editor 等），使“GUI/API 可见能力”与 operation 语义更一致。
+- user/auth 侧新增 system-scope operations（preferences/models/billing/api-config/register），route 迁移为薄封装。
+
+因此，本报告中关于 “62% API 写入口未接入 operation” 的描述属于历史状态；以 `docs/agent_delivery_progress.md` 里最新进度与代码扫描为准。
+
 ## 一、总体评估
 
 当前 Agent 处于 **"可用 MVP → 功能型项目助手"** 的过渡阶段。
