@@ -10,6 +10,8 @@ export type {
     ClipAttachment,
     ClipTransition,
     ClipMetadata,
+    UiOverlayItem,
+    EndSlateContent,
     EditorConfig,
     TimelineState,
     ComputedClip,

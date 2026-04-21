@@ -34,7 +34,8 @@ export interface EditorConfig {
  */
 export interface VideoClip {
     id: string
-    src: string                    // COS URL
+    kind?: 'video' | 'end-slate'
+    src?: string                   // COS URL
     durationInFrames: number       // 播放时长
 
     // 素材内裁剪 (可选)
@@ -66,6 +67,8 @@ export interface ClipAttachment {
         text: string
         style: 'default' | 'cinematic'
     }
+    uiOverlays?: UiOverlayItem[]
+    endSlate?: EndSlateContent
 }
 
 /**
@@ -80,9 +83,36 @@ export interface ClipTransition {
  * 片段元数据
  */
 export interface ClipMetadata {
-    panelId: string
-    storyboardId: string
+    panelId?: string
+    storyboardId?: string
+    beatId?: string
+    shotId?: string
+    referenceIds?: string[]
     description?: string
+}
+
+export interface UiOverlayItem {
+    id: string
+    type: 'badge' | 'damage' | 'objective' | 'caption' | 'reticle' | 'cta'
+    text: string
+    position:
+        | 'top-left'
+        | 'top-center'
+        | 'top-right'
+        | 'center'
+        | 'bottom-left'
+        | 'bottom-center'
+        | 'bottom-right'
+    emphasis?: 'low' | 'medium' | 'high'
+    color?: string | null
+}
+
+export interface EndSlateContent {
+    title: string
+    tagline?: string | null
+    cta?: string | null
+    logoUrl?: string | null
+    backgroundUrl?: string | null
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   handlePanelImageTask,
   handlePanelVariantTask,
 } from './handlers/image-task-handlers'
+import { handleGameplayTaskByType } from './handlers/gameplay-video'
 
 type AnyObj = Record<string, unknown>
 
@@ -42,6 +43,8 @@ async function processImageTask(job: Job<TaskJobData>) {
       return await handlePanelImageTask(job)
     case TASK_TYPE.PANEL_VARIANT:
       return await handlePanelVariantTask(job)
+    case TASK_TYPE.GAMEPLAY_KEYFRAME_GENERATE:
+      return await handleGameplayTaskByType(job)
     default:
       throw new Error(`Unsupported image task type: ${job.data.type}`)
   }

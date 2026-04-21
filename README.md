@@ -30,7 +30,35 @@
 - 🎨 **角色 & 场景生成** — AI 生成一致性人物和场景图片
 - 📽️ **分镜视频制作** — 自动生成分镜头并合成视频
 - 🎙️ **AI 配音** — 多角色语音合成
+- 🕹️ **Gameplay Video Studio** — 基于脚本与参考帧生成 AI 伪实机玩法片
 - 🌐 **多语言支持** — 中文 / 英文界面，右上角一键切换
+
+---
+
+## 📘 Gameplay Video Studio 手册
+
+仓库中已经加入 `Gameplay Video Studio` 工作流，用于从：
+
+- 脚本
+- 竞品参考帧
+- 风格参考
+
+生成 `15-30 秒` 的 AI 伪实机玩法片。
+
+使用说明见：
+
+- [docs/gameplay-video-studio-sop-zh.md](docs/gameplay-video-studio-sop-zh.md)
+- [docs/gameplay-video-studio-manual.md](docs/gameplay-video-studio-manual.md)
+- [docs/gameplay-video-pitfall-log.md](docs/gameplay-video-pitfall-log.md)
+
+这份手册包含：
+
+- 面向中国非技术同事的简版 SOP
+- 适用场景
+- 逐步操作流程
+- 每个按钮和字段的用途
+- 常见问题
+- 给维护者的代码入口说明
 
 ---
 

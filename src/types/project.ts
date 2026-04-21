@@ -1,5 +1,6 @@
 import type { CapabilitySelections } from '@/lib/model-config-contract'
 import type { LocationAvailableSlot } from '@/lib/location-available-slots'
+import type { GameplayVideoProject } from './gameplay-video'
 
 // ============================================
 // 基础项目类型
@@ -284,4 +285,5 @@ export interface NovelPromotionProject {
 // ============================================
 export interface Project extends BaseProject {
   novelPromotionData?: NovelPromotionProject
+  gameplayVideoData?: GameplayVideoProject
 }

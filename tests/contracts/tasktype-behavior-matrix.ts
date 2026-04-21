@@ -10,10 +10,15 @@ export type TaskTypeBehaviorMatrixEntry = {
 }
 
 function resolveChainTestByTaskType(taskType: TaskType): string {
-  if (taskType === 'video_panel' || taskType === 'lip_sync') {
+  if (taskType === 'video_panel' || taskType === 'lip_sync' || taskType === 'gameplay_shot_generate' || taskType === 'gameplay_render') {
     return 'tests/integration/chain/video.chain.test.ts'
   }
-  if (taskType === 'voice_line' || taskType === 'voice_design' || taskType === 'asset_hub_voice_design') {
+  if (
+    taskType === 'voice_line'
+    || taskType === 'voice_design'
+    || taskType === 'asset_hub_voice_design'
+    || taskType === 'gameplay_voiceover_generate'
+  ) {
     return 'tests/integration/chain/voice.chain.test.ts'
   }
   if (
@@ -39,6 +44,8 @@ function resolveChainTestByTaskType(taskType: TaskType): string {
     || taskType === 'asset_hub_ai_modify_character'
     || taskType === 'asset_hub_ai_modify_location'
     || taskType === 'asset_hub_reference_to_character'
+    || taskType === 'gameplay_beats_generate'
+    || taskType === 'gameplay_ui_compose'
   ) {
     return 'tests/integration/chain/text.chain.test.ts'
   }
@@ -88,8 +95,15 @@ function resolveApiContractByTaskType(taskType: TaskType): string {
     || taskType === 'asset_hub_image'
     || taskType === 'asset_hub_modify'
     || taskType === 'regenerate_storyboard_text'
+    || taskType === 'gameplay_keyframe_generate'
+    || taskType === 'gameplay_shot_generate'
+    || taskType === 'gameplay_voiceover_generate'
+    || taskType === 'gameplay_render'
   ) {
     return 'tests/integration/api/contract/direct-submit-routes.test.ts'
+  }
+  if (taskType === 'gameplay_beats_generate' || taskType === 'gameplay_ui_compose') {
+    return 'tests/integration/api/contract/llm-observe-routes.test.ts'
   }
   return 'tests/integration/api/contract/task-infra-routes.test.ts'
 }

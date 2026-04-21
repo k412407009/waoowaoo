@@ -18,6 +18,7 @@ import { normalizeToBase64ForGeneration } from '@/lib/media/outbound-image'
 import { resolveBuiltinCapabilitiesByModelKey } from '@/lib/model-capabilities/lookup'
 import { parseModelKeyStrict } from '@/lib/model-config-contract'
 import { getProviderConfig } from '@/lib/api-config'
+import { handleGameplayTaskByType } from './handlers/gameplay-video'
 
 type AnyObj = Record<string, unknown>
 type VideoOptionValue = string | number | boolean
@@ -298,6 +299,9 @@ async function processVideoTask(job: Job<TaskJobData>) {
       return await handleVideoPanelTask(job)
     case TASK_TYPE.LIP_SYNC:
       return await handleLipSyncTask(job)
+    case TASK_TYPE.GAMEPLAY_SHOT_GENERATE:
+    case TASK_TYPE.GAMEPLAY_RENDER:
+      return await handleGameplayTaskByType(job)
     default:
       throw new Error(`Unsupported video task type: ${job.data.type}`)
   }

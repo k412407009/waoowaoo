@@ -359,11 +359,190 @@ model Project {
   updatedAt          DateTime               @default(now()) @updatedAt
   lastAccessedAt     DateTime?
   novelPromotionData NovelPromotionProject?
+  gameplayVideoData  GameplayVideoProject?
   user               User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   usageCosts         UsageCost[]
 
   @@index([userId])
   @@map("projects")
+}
+
+model GameplayVideoProject {
+  id                String                 @id @default(uuid())
+  projectId         String                 @unique
+  language          String                 @default("zh")
+  aspectRatio       String                 @default("9:16")
+  targetDurationSec Int                    @default(20)
+  visualStyle       String?                @db.Text
+  uiStyle           String?                @db.Text
+  narratorVoice     String?                @db.Text
+  endSlateConfig    String?                @db.Text
+  analysisModel     String?
+  imageModel        String?
+  videoModel        String?
+  audioModel        String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @default(now()) @updatedAt
+  brief             GameplayBrief?
+  beats             GameplayBeat[]
+  editorProject     GameplayEditProject?
+  project           Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  references        GameplayReference[]
+  renderVersions    GameplayRenderVersion[]
+
+  @@map("gameplay_video_projects")
+}
+
+model GameplayBrief {
+  id                     String               @id @default(uuid())
+  gameplayVideoProjectId String               @unique
+  script                 String               @db.Text
+  sellingPoints          String?              @db.Text
+  coreLoop               String?              @db.Text
+  targetAudience         String?              @db.Text
+  platforms              String?              @db.Text
+  cta                    String?              @db.Text
+  notes                  String?              @db.Text
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @default(now()) @updatedAt
+  project                GameplayVideoProject @relation(fields: [gameplayVideoProjectId], references: [id], onDelete: Cascade)
+
+  @@map("gameplay_briefs")
+}
+
+model GameplayReference {
+  id                     String               @id @default(uuid())
+  gameplayVideoProjectId String
+  kind                   String               @default("style")
+  title                  String?
+  imageUrl               String?              @db.Text
+  notes                  String?              @db.Text
+  imageMediaId           String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @default(now()) @updatedAt
+  imageMedia             MediaObject?         @relation("GameplayReferenceImageMedia", fields: [imageMediaId], references: [id], onDelete: SetNull)
+  project                GameplayVideoProject @relation(fields: [gameplayVideoProjectId], references: [id], onDelete: Cascade)
+
+  @@index([gameplayVideoProjectId])
+  @@index([imageMediaId])
+  @@map("gameplay_references")
+}
+
+model GameplayBeat {
+  id                     String               @id @default(uuid())
+  gameplayVideoProjectId String
+  orderIndex             Int
+  archetype              String?              @db.VarChar(64)
+  intent                 String               @db.Text
+  durationSec            Int                  @default(3)
+  camera                 String?              @db.Text
+  uiNeeds                String?              @db.Text
+  subtitleText           String?              @db.Text
+  voiceoverText          String?              @db.Text
+  voiceoverAudioUrl      String?              @db.Text
+  voiceoverAudioMediaId  String?
+  voiceoverDurationMs    Int?
+  generationMode         String               @default("hybrid")
+  shotPrompt             String?              @db.Text
+  overlaySpec            String?              @db.Text
+  selectedShotId         String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @default(now()) @updatedAt
+  keyframes              GameplayKeyframe[]
+  project                GameplayVideoProject @relation(fields: [gameplayVideoProjectId], references: [id], onDelete: Cascade)
+  selectedShot           GameplayShot?        @relation("GameplayBeatSelectedShot", fields: [selectedShotId], references: [id], onDelete: SetNull)
+  shots                  GameplayShot[]       @relation("GameplayBeatShots")
+  voiceoverAudioMedia    MediaObject?         @relation("GameplayBeatVoiceoverAudioMedia", fields: [voiceoverAudioMediaId], references: [id], onDelete: SetNull)
+
+  @@unique([gameplayVideoProjectId, orderIndex])
+  @@index([gameplayVideoProjectId])
+  @@index([selectedShotId])
+  @@index([voiceoverAudioMediaId])
+  @@map("gameplay_beats")
+}
+
+model GameplayKeyframe {
+  id           String        @id @default(uuid())
+  beatId        String
+  kind         String
+  prompt       String?       @db.Text
+  imageUrl      String?       @db.Text
+  imageMediaId String?
+  referenceIds  String?       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @default(now()) @updatedAt
+  beat         GameplayBeat  @relation(fields: [beatId], references: [id], onDelete: Cascade)
+  imageMedia   MediaObject?  @relation("GameplayKeyframeImageMedia", fields: [imageMediaId], references: [id], onDelete: SetNull)
+
+  @@unique([beatId, kind])
+  @@index([beatId])
+  @@index([imageMediaId])
+  @@map("gameplay_keyframes")
+}
+
+model GameplayShot {
+  id            String         @id @default(uuid())
+  beatId         String
+  variantIndex  Int            @default(0)
+  mode          String         @default("hybrid")
+  prompt        String?        @db.Text
+  videoUrl       String?        @db.Text
+  videoMediaId  String?
+  status        String         @default("draft")
+  notes         String?        @db.Text
+  overlaySpec   String?        @db.Text
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @default(now()) @updatedAt
+  beat            GameplayBeat   @relation("GameplayBeatShots", fields: [beatId], references: [id], onDelete: Cascade)
+  selectedByBeats GameplayBeat[] @relation("GameplayBeatSelectedShot")
+  videoMedia      MediaObject?   @relation("GameplayShotVideoMedia", fields: [videoMediaId], references: [id], onDelete: SetNull)
+
+  @@unique([beatId, variantIndex])
+  @@index([beatId])
+  @@index([videoMediaId])
+  @@map("gameplay_shots")
+}
+
+model GameplayEditProject {
+  id                     String                 @id @default(uuid())
+  gameplayVideoProjectId String                 @unique
+  projectData            String                 @db.Text
+  renderStatus           String?
+  renderTaskId           String?
+  outputUrl              String?                @db.Text
+  outputMediaId          String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @default(now()) @updatedAt
+  outputMedia            MediaObject?           @relation("GameplayEditProjectOutputMedia", fields: [outputMediaId], references: [id], onDelete: SetNull)
+  project                GameplayVideoProject   @relation(fields: [gameplayVideoProjectId], references: [id], onDelete: Cascade)
+  renderVersions         GameplayRenderVersion[]
+
+  @@index([outputMediaId])
+  @@map("gameplay_edit_projects")
+}
+
+model GameplayRenderVersion {
+  id                     String               @id @default(uuid())
+  gameplayVideoProjectId String
+  editorProjectId        String?
+  language               String               @default("zh")
+  aspectRatio            String               @default("9:16")
+  status                 String               @default("pending")
+  outputUrl              String?              @db.Text
+  outputMediaId          String?
+  taskId                 String?
+  errorMessage           String?              @db.Text
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @default(now()) @updatedAt
+  editorProject          GameplayEditProject? @relation(fields: [editorProjectId], references: [id], onDelete: SetNull)
+  outputMedia            MediaObject?         @relation("GameplayRenderVersionOutputMedia", fields: [outputMediaId], references: [id], onDelete: SetNull)
+  project                GameplayVideoProject @relation(fields: [gameplayVideoProjectId], references: [id], onDelete: Cascade)
+
+  @@index([gameplayVideoProjectId])
+  @@index([editorProjectId])
+  @@index([outputMediaId])
+  @@index([taskId])
+  @@map("gameplay_render_versions")
 }
 
 model Session {
@@ -980,6 +1159,12 @@ model MediaObject {
   globalLocationImageImages             GlobalLocationImage[]       @relation("GlobalLocationImageMedia")
   globalLocationImagePreviousImages     GlobalLocationImage[]       @relation("GlobalLocationImagePreviousImageMedia")
   globalVoiceCustomVoices               GlobalVoice[]               @relation("GlobalVoiceCustomVoiceMedia")
+  gameplayReferenceImages               GameplayReference[]         @relation("GameplayReferenceImageMedia")
+  gameplayKeyframeImages                GameplayKeyframe[]          @relation("GameplayKeyframeImageMedia")
+  gameplayShotVideos                    GameplayShot[]              @relation("GameplayShotVideoMedia")
+  gameplayBeatVoiceovers                GameplayBeat[]              @relation("GameplayBeatVoiceoverAudioMedia")
+  gameplayEditProjectOutputs            GameplayEditProject[]       @relation("GameplayEditProjectOutputMedia")
+  gameplayRenderVersionOutputs          GameplayRenderVersion[]     @relation("GameplayRenderVersionOutputMedia")
 
   @@index([createdAt])
   @@map("media_objects")

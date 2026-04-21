@@ -2,6 +2,7 @@ export type RouteCategory =
   | 'assets'
   | 'asset-hub'
   | 'novel-promotion'
+  | 'gameplay-video'
   | 'projects'
   | 'tasks'
   | 'user'
@@ -69,6 +70,18 @@ const ROUTE_FILES = [
   'src/app/api/cos/image/route.ts',
   'src/app/api/files/[...path]/route.ts',
   'src/app/api/storage/sign/route.ts',
+  'src/app/api/gameplay-video/[projectId]/route.ts',
+  'src/app/api/gameplay-video/[projectId]/brief/route.ts',
+  'src/app/api/gameplay-video/[projectId]/references/route.ts',
+  'src/app/api/gameplay-video/[projectId]/beats/generate/route.ts',
+  'src/app/api/gameplay-video/[projectId]/beats/[beatId]/keyframes/generate/route.ts',
+  'src/app/api/gameplay-video/[projectId]/beats/[beatId]/shot/generate/route.ts',
+  'src/app/api/gameplay-video/[projectId]/beats/[beatId]/shot/select/route.ts',
+  'src/app/api/gameplay-video/[projectId]/ui-overlay/compose/route.ts',
+  'src/app/api/gameplay-video/[projectId]/voice/generate/route.ts',
+  'src/app/api/gameplay-video/[projectId]/editor/route.ts',
+  'src/app/api/gameplay-video/[projectId]/render/route.ts',
+  'src/app/api/gameplay-video/[projectId]/render/[id]/route.ts',
   'src/app/api/novel-promotion/[projectId]/ai-create-character/route.ts',
   'src/app/api/novel-promotion/[projectId]/ai-create-location/route.ts',
   'src/app/api/novel-promotion/[projectId]/ai-modify-appearance/route.ts',
@@ -174,6 +187,7 @@ function resolveCategory(routeFile: string): RouteCategory {
   if (routeFile.startsWith('src/app/api/assets/')) return 'assets'
   if (routeFile.startsWith('src/app/api/asset-hub/')) return 'asset-hub'
   if (routeFile.startsWith('src/app/api/novel-promotion/')) return 'novel-promotion'
+  if (routeFile.startsWith('src/app/api/gameplay-video/')) return 'gameplay-video'
   if (routeFile.startsWith('src/app/api/projects/')) return 'projects'
   if (
     routeFile.startsWith('src/app/api/tasks/')
@@ -220,9 +234,15 @@ function resolveContractGroup(routeFile: string): RouteContractGroup {
     || routeFile.endsWith('/regenerate-single-image/route.ts')
     || routeFile.endsWith('/regenerate-storyboard-text/route.ts')
     || routeFile.endsWith('/voice-generate/route.ts')
+    || routeFile.endsWith('/beats/generate/route.ts')
+    || routeFile.endsWith('/keyframes/generate/route.ts')
+    || routeFile.endsWith('/shot/generate/route.ts')
+    || routeFile.endsWith('/ui-overlay/compose/route.ts')
+    || routeFile.endsWith('/voice/generate/route.ts')
   ) {
     return 'direct-submit-routes'
   }
+  if (routeFile.startsWith('src/app/api/gameplay-video/')) return 'user-project-routes'
   if (routeFile.startsWith('src/app/api/assets/')) return 'crud-assets-routes'
   if (routeFile.startsWith('src/app/api/asset-hub/')) return 'crud-asset-hub-routes'
   if (routeFile.startsWith('src/app/api/novel-promotion/')) return 'crud-novel-promotion-routes'

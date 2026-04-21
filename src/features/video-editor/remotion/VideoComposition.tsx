@@ -1,6 +1,6 @@
 import React from 'react'
-import { AbsoluteFill, Sequence, Video, Audio, useCurrentFrame, interpolate } from 'remotion'
-import { VideoClip, BgmClip, EditorConfig } from '../types/editor.types'
+import { AbsoluteFill, Img, Sequence, Video, Audio, useCurrentFrame, interpolate } from 'remotion'
+import { VideoClip, BgmClip, EditorConfig, UiOverlayItem, EndSlateContent } from '../types/editor.types'
 import { computeClipPositions } from '../utils/time-utils'
 
 interface VideoCompositionProps {
@@ -161,16 +161,19 @@ const ClipRenderer: React.FC<ClipRendererProps> = ({
 
     return (
         <AbsoluteFill style={{ opacity, transform }}>
-            {/* 视频 */}
-            <Video
-                src={clip.src}
-                startFrom={clip.trim?.from || 0}
-                style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover'
-                }}
-            />
+            {clip.kind === 'end-slate' || !clip.src ? (
+                <EndSlateRenderer content={clip.attachment?.endSlate} />
+            ) : (
+                <Video
+                    src={clip.src}
+                    startFrom={clip.trim?.from || 0}
+                    style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover'
+                    }}
+                />
+            )}
 
             {/* 附属配音 */}
             {clip.attachment?.audio && (
@@ -186,6 +189,10 @@ const ClipRenderer: React.FC<ClipRendererProps> = ({
                     text={clip.attachment.subtitle.text}
                     style={clip.attachment.subtitle.style}
                 />
+            )}
+
+            {clip.attachment?.uiOverlays && clip.attachment.uiOverlays.length > 0 && (
+                <UiOverlayLayer items={clip.attachment.uiOverlays} />
             )}
         </AbsoluteFill>
     )
@@ -228,6 +235,168 @@ const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({ text, style }) => {
         >
             <div style={styles[style]}>
                 {text}
+            </div>
+        </AbsoluteFill>
+    )
+}
+
+interface UiOverlayLayerProps {
+    items: UiOverlayItem[]
+}
+
+function resolveOverlayAnchor(position: UiOverlayItem['position']): React.CSSProperties {
+    switch (position) {
+        case 'top-left':
+            return { top: '5%', left: '6%' }
+        case 'top-center':
+            return { top: '5%', left: '50%', transform: 'translateX(-50%)' }
+        case 'top-right':
+            return { top: '5%', right: '6%' }
+        case 'center':
+            return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }
+        case 'bottom-left':
+            return { bottom: '14%', left: '6%' }
+        case 'bottom-center':
+            return { bottom: '14%', left: '50%', transform: 'translateX(-50%)' }
+        case 'bottom-right':
+        default:
+            return { bottom: '14%', right: '6%' }
+    }
+}
+
+function resolveOverlayStyle(item: UiOverlayItem): React.CSSProperties {
+    const emphasis = item.emphasis || 'medium'
+    const fontSize = emphasis === 'high' ? 34 : emphasis === 'low' ? 20 : 26
+    const padding = emphasis === 'high' ? '12px 18px' : '8px 14px'
+
+    return {
+        position: 'absolute',
+        ...resolveOverlayAnchor(item.position),
+        padding,
+        borderRadius: item.type === 'reticle' ? '999px' : '14px',
+        border: '1px solid rgba(255,255,255,0.28)',
+        background: item.type === 'damage'
+            ? 'rgba(179, 26, 26, 0.72)'
+            : item.type === 'objective'
+                ? 'rgba(22, 95, 161, 0.78)'
+                : item.type === 'cta'
+                    ? 'rgba(15, 122, 92, 0.84)'
+                    : 'rgba(10, 12, 22, 0.68)',
+        color: item.color || '#f8fafc',
+        boxShadow: '0 10px 30px rgba(0,0,0,0.35)',
+        fontSize,
+        fontWeight: emphasis === 'high' ? 800 : 700,
+        letterSpacing: '0.02em',
+        textShadow: '0 2px 8px rgba(0,0,0,0.4)',
+        backdropFilter: 'blur(8px)',
+    }
+}
+
+const UiOverlayLayer: React.FC<UiOverlayLayerProps> = ({ items }) => {
+    return (
+        <AbsoluteFill>
+            {items.map((item) => (
+                <div key={item.id} style={resolveOverlayStyle(item)}>
+                    {item.text}
+                </div>
+            ))}
+        </AbsoluteFill>
+    )
+}
+
+interface EndSlateRendererProps {
+    content?: EndSlateContent | null
+}
+
+const EndSlateRenderer: React.FC<EndSlateRendererProps> = ({ content }) => {
+    return (
+        <AbsoluteFill
+            style={{
+                background: 'radial-gradient(circle at top, rgba(54, 74, 126, 0.55), rgba(8, 10, 18, 1) 62%)',
+                color: 'white',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: '10%',
+                textAlign: 'center',
+            }}
+        >
+            {content?.backgroundUrl ? (
+                <Img
+                    src={content.backgroundUrl}
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                        opacity: 0.24,
+                    }}
+                />
+            ) : null}
+
+            <div
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'linear-gradient(180deg, rgba(6, 10, 20, 0.18), rgba(6, 10, 20, 0.88))',
+                }}
+            />
+
+            <div
+                style={{
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 18,
+                    maxWidth: '78%',
+                }}
+            >
+                {content?.logoUrl ? (
+                    <Img
+                        src={content.logoUrl}
+                        style={{
+                            width: 140,
+                            height: 140,
+                            objectFit: 'contain',
+                            filter: 'drop-shadow(0 10px 30px rgba(0,0,0,0.35))',
+                        }}
+                    />
+                ) : null}
+
+                <div style={{ fontSize: 64, fontWeight: 800, lineHeight: 1.05 }}>
+                    {content?.title || 'Gameplay Video'}
+                </div>
+
+                {content?.tagline ? (
+                    <div
+                        style={{
+                            fontSize: 28,
+                            lineHeight: 1.4,
+                            color: 'rgba(255,255,255,0.84)',
+                        }}
+                    >
+                        {content.tagline}
+                    </div>
+                ) : null}
+
+                {content?.cta ? (
+                    <div
+                        style={{
+                            marginTop: 12,
+                            padding: '14px 22px',
+                            borderRadius: 999,
+                            background: 'rgba(20, 184, 166, 0.18)',
+                            border: '1px solid rgba(94, 234, 212, 0.38)',
+                            color: '#ccfbf1',
+                            fontSize: 24,
+                            fontWeight: 700,
+                            letterSpacing: '0.03em',
+                        }}
+                    >
+                        {content.cta}
+                    </div>
+                ) : null}
             </div>
         </AbsoluteFill>
     )

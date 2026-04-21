@@ -390,6 +390,30 @@ export default function ProjectDetailPage() {
       {/* 主内容区 - 占满全部宽度 */}
       <main className="flex-1 overflow-y-auto">
         <div className="container mx-auto px-4 py-8">
+          <div className="glass-surface mb-6 overflow-hidden border border-white/10">
+            <div
+              className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between"
+              style={{
+                background:
+                  'radial-gradient(circle at top left, rgba(240, 119, 76, 0.16), transparent 26%), linear-gradient(135deg, rgba(11, 17, 30, 0.96), rgba(18, 31, 54, 0.92))',
+              }}
+            >
+              <div>
+                <div className="text-xs uppercase tracking-[0.2em] text-white/45">并行工作流</div>
+                <div className="mt-2 text-lg font-semibold text-white">玩法视频工作台</div>
+                <p className="mt-1 text-sm text-white/65">
+                  针对“脚本 + 参考帧”生成 AI 伪实机玩法片的并行工作流。
+                </p>
+              </div>
+              <button
+                onClick={() => router.push({ pathname: `/workspace/${projectId}/gameplay-video` })}
+                className="glass-btn-base glass-btn-primary px-4 py-2"
+              >
+                打开玩法视频工作台
+              </button>
+            </div>
+          </div>
+
           {isGlobalAssetsView && project.novelPromotionData ? (
             // 全局资产视图（确保数据准备好）
             <div>

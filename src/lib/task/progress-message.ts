@@ -41,6 +41,12 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   [TASK_TYPE.ASSET_HUB_AI_MODIFY_LOCATION]: 'progress.taskType.assetHubAiModifyLocation',
   [TASK_TYPE.ASSET_HUB_AI_MODIFY_PROP]: 'progress.taskType.assetHubAiModifyProp',
   [TASK_TYPE.ASSET_HUB_REFERENCE_TO_CHARACTER]: 'progress.taskType.assetHubReferenceToCharacter',
+  [TASK_TYPE.GAMEPLAY_BEATS_GENERATE]: 'progress.taskType.gameplayBeatsGenerate',
+  [TASK_TYPE.GAMEPLAY_KEYFRAME_GENERATE]: 'progress.taskType.gameplayKeyframeGenerate',
+  [TASK_TYPE.GAMEPLAY_SHOT_GENERATE]: 'progress.taskType.gameplayShotGenerate',
+  [TASK_TYPE.GAMEPLAY_UI_COMPOSE]: 'progress.taskType.gameplayUiCompose',
+  [TASK_TYPE.GAMEPLAY_VOICEOVER_GENERATE]: 'progress.taskType.gameplayVoiceoverGenerate',
+  [TASK_TYPE.GAMEPLAY_RENDER]: 'progress.taskType.gameplayRender',
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -75,6 +81,12 @@ const STAGE_LABELS: Record<string, string> = {
   llm_proxy_submit: 'progress.stage.llmProxySubmit',
   llm_proxy_execute: 'progress.stage.llmProxyExecute',
   llm_proxy_persist: 'progress.stage.llmProxyPersist',
+  gameplay_generate_beats: 'progress.stage.gameplayGenerateBeats',
+  gameplay_generate_keyframe: 'progress.stage.gameplayGenerateKeyframe',
+  gameplay_generate_shot: 'progress.stage.gameplayGenerateShot',
+  gameplay_ui_compose: 'progress.stage.gameplayUiCompose',
+  gameplay_generate_voiceover: 'progress.stage.gameplayGenerateVoiceover',
+  gameplay_render: 'progress.stage.gameplayRender',
 }
 
 function asString(value: unknown): string | null {
